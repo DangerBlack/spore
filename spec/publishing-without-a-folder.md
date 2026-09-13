@@ -1,8 +1,11 @@
 # Publishing without a folder
 
-**Status: draft. Nothing in this document is implemented.** It exists to be
-argued with before any code is written, in the manner of
-[mutable-sites.md](mutable-sites.md). The open questions at the end are real.
+**Status: S1 and Z1 are implemented. Z2, Z3 and Option B are not.** This was
+written to be argued with before any code existed, in the manner of
+[mutable-sites.md](mutable-sites.md), and the argument changed it twice — an
+editor became a zip, and the zip turned out to be the second thing to build
+rather than the first. The open questions at the end are still real; the first
+two are answered by one test on a real iPhone, which has not been run.
 
 ## The problem
 
@@ -178,16 +181,16 @@ it ever gets larger than that in the planning, it is the wrong thing.
 
 ## Phases
 
-**S1 — a single page, and flat sets of files.** Make the publish rule the read
+**S1 — a single page, and flat sets of files. Done.** Make the publish rule the read
 rule, add a picker without `webkitdirectory`. Almost nothing to write, and it
 covers the commonest thing anyone publishes. It is also the smallest possible
 test of whether the iOS wall is really where this document claims it is.
 
-**Z1 — accept a zip.** For everything with a subdirectory in it, which a file
+**Z1 — accept a zip. Done.** For everything with a subdirectory in it, which a file
 picker can never express. The reader unpacks in memory and the entries go to
 `seed()` unchanged.
 
-**Z2 — say what the gate will refuse.** A site arriving from elsewhere will
+**Z2 — say what the gate will refuse.** Not built. A site arriving from elsewhere will
 often contain a `<script>`, a font from Google, an analytics pixel or a
 hotlinked image. Under the CSP these do not fail loudly, they silently never
 happen, and the author finds out from a reader or not at all. Report them, with
@@ -198,7 +201,7 @@ script, not to fix a path. The moment the gate edits an author's bytes, what was
 published is no longer what was reviewed, and the signature covers something
 nobody read.
 
-**Z3 — "edit this site".** When reading a site whose key is the key you are
+**Z3 — "edit this site".** Not built. When reading a site whose key is the key you are
 signed in with, offer it back as a zip, so the round trip closes with the tools
 the author already uses. The update machinery exists and already reaches
 readers.

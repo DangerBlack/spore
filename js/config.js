@@ -73,4 +73,18 @@ export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-13.2'
+export const GATE_VERSION = '2026-09-13.3'
+
+/**
+ * How much a .zip may unpack to, in total and per file.
+ *
+ * These are not security limits so much as honesty limits: a browser publishing
+ * a site holds it in memory and seeds it from there, so an archive larger than
+ * this produces a tab that dies rather than a site that spreads. Refusing early,
+ * by name, beats a crash the author cannot interpret.
+ *
+ * Provisional. They should come from measuring what a mid-range phone can
+ * actually hash and seed, which has not been done yet.
+ */
+export const ZIP_MAX_TOTAL_BYTES = 128_000_000
+export const ZIP_MAX_ENTRY_BYTES = 64_000_000

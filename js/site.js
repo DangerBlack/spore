@@ -19,8 +19,22 @@ const HTML = /\.html?$/i
  * @returns {string|null} the entry file's path within the torrent
  */
 export function findEntry (torrent) {
-  const paths = torrent.files.map(file => normalize(file.path))
+  return chooseEntry(torrent.files.map(file => normalize(file.path)))
+}
 
+/**
+ * The same question, asked of paths rather than of a torrent.
+ *
+ * Publishing needs it too: the gate used to insist on an `index.html` before it
+ * would seed anything, while this function was perfectly happy to render a lone
+ * page under any other name — so the gate refused to publish sites it could
+ * open. One rule, asked in both places, is the only way those two stay honest
+ * with each other.
+ *
+ * @param {string[]} paths
+ * @returns {string|null}
+ */
+export function chooseEntry (paths) {
   const indexes = paths.filter(path => INDEX.test(path))
   if (indexes.length > 0) return shallowest(indexes)
 

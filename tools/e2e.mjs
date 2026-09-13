@@ -29,6 +29,9 @@ const CHROME = option('--chrome', process.env.CHROME ?? '/usr/bin/google-chrome'
 const SITE = 'example-site'
 const SITE_FILES = ['index.html', 'about.html', 'probe.js', 'css/site.css', 'css/leaf.svg']
 
+/** A .zip of a two-file site, for the picker check far below. */
+const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
+
 let puppeteer
 try {
   puppeteer = (await import('puppeteer-core')).default
@@ -76,7 +79,7 @@ const browser = await puppeteer.launch({
 try {
   await run()
 } catch (err) {
-  console.error('\nThe check itself broke:', err.message)
+  console.error('\nThe check itself broke:', err.stack ?? err.message)
   results.push({ name: 'suite completed', pass: false })
 } finally {
   await browser.close()
@@ -298,6 +301,7 @@ async function run () {
 
   await checkKeepingOffline(page, infoHash)
   await checkPublishingByDrop(page)
+  await checkPublishingFromThePicker(page)
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -328,6 +332,151 @@ async function run () {
  * storage is unavailable". Simulated here by making `indexedDB.open` hang, the
  * worst case, since a promise that never settles is what actually wedged it.
  */
+/**
+ * The other two ways in: an ordinary file picker, and a .zip through it.
+ *
+ * This is the path that exists on devices with no directory picker at all, so
+ * it is checked in a browser rather than reasoned about — and the archive is
+ * unpacked by the gate's own reader, with `DecompressionStream`, no library.
+ *
+ * It also pins down the rule that publishing and reading now share. The gate
+ * used to refuse to publish anything without an `index.html`, while the viewer
+ * was perfectly happy to render a lone page under any other name: it would not
+ * let you publish a site it could open. One page under any name publishes; a
+ * set with no entry asks first, because it renders as a list of files.
+ */
+
+async function checkPublishingFromThePicker (page) {
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  check('the landing page offers a file picker beside the folder one',
+    await page.$eval('#files-input', input => input.type === 'file' && input.multiple &&
+      !input.hasAttribute('webkitdirectory')))
+
+  // --- a .zip, with a folder inside it --------------------------------------
+  const before = await page.$eval('#share-link', input => input.value)
+  await pick(page, [{ name: 'zipped-site.zip', type: 'application/zip', base64: ZIPPED_SITE }])
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  check('an archive is unpacked and reaches the signing question, like a folder', true)
+  await page.click('#signin-skip')
+
+  const link = await settled(page, before)
+  check('a .zip publishes and yields a shareable link',
+    link.includes('#magnet:?xt=urn:btih:') && link !== before, link.slice(0, 70))
+
+  const unpacked = await (await siteFrame(page)).evaluate(() => ({
+    heading: document.querySelector('h1')?.textContent,
+    colour: getComputedStyle(document.querySelector('h1')).color
+  }))
+  check('the unpacked site renders out of the swarm', unpacked.heading === 'Unpacked', unpacked.heading)
+  // The archive's root folder must be stripped exactly as a drop strips it, or
+  // `css/style.css` resolves one level too deep and the page loads unstyled.
+  check('a subdirectory inside the archive survives, so relative links resolve',
+    unpacked.colour === 'rgb(12, 34, 56)', unpacked.colour)
+
+  // --- one page, named whatever its author called it ------------------------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'il-mio-post.html', type: 'text/html', text: '<h1>Un post</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  check('a single page under any name publishes, as the viewer always rendered it',
+    !(await page.$eval('#no-entry-dialog', d => d.open)))
+  await page.click('#signin-skip')
+
+  await settled(page, '')
+  check('and it opens as the site, not as a file list',
+    await (await siteFrame(page)).evaluate(() => document.querySelector('h1')?.textContent) === 'Un post')
+
+  // --- no entry page at all: a question, not a refusal ----------------------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [
+    { name: 'one.html', type: 'text/html', text: '<h1>one</h1>' },
+    { name: 'two.html', type: 'text/html', text: '<h1>two</h1>' }
+  ])
+  await page.waitForFunction(
+    () => document.getElementById('no-entry-dialog').open, { timeout: 20_000 })
+  check('files with no entry page raise a warning before anything is hashed', true)
+  check('the warning names the files it is talking about',
+    (await page.$eval('#no-entry-files', list => list.textContent)).includes('one.html'))
+
+  const unchanged = await page.$eval('#share-link', input => input.value)
+  await page.click('#no-entry-cancel')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  // Going back must cost nothing: no signature asked for, no torrent made, and
+  // the landing page — which is also the drop zone — back in reach.
+  await wait(1500)
+  const after = await page.evaluate(() => ({
+    signing: document.getElementById('signin-dialog').open,
+    welcome: !document.getElementById('welcome').hidden,
+    link: document.getElementById('share-link').value
+  }))
+  check('going back publishes nothing and leaves the drop zone in reach',
+    !after.signing && after.welcome && after.link === unchanged, JSON.stringify(after).slice(0, 90))
+}
+
+/**
+ * Wait for a publish to land, and say what went wrong if it does not.
+ *
+ * A bare wait for the viewer reports "30000ms exceeded", which names the
+ * symptom and hides every cause. Publishing ends in one of three places, and
+ * two of them are on screen already.
+ */
+async function settled (page, before) {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const state = await page.evaluate(previous => {
+      const link = document.getElementById('share-link').value
+      const shown = !document.getElementById('share').hidden && link !== previous
+      const frame = document.getElementById('viewer')
+      if (shown && !frame.hidden && frame.src.includes('/webtorrent/')) return { link }
+
+      if (!document.getElementById('error').hidden) {
+        return {
+          failed: `${document.getElementById('error-title').textContent}: ` +
+            document.getElementById('error-detail').textContent
+        }
+      }
+      return null
+    }, before)
+
+    if (state?.failed) throw new Error(`publishing failed — ${state.failed}`)
+    if (state) return state.link
+    await wait(200)
+  }
+  const stuck = await page.evaluate(() => ({
+    notice: document.getElementById('notice').hidden ? null : document.getElementById('notice').textContent,
+    share: document.getElementById('share').hidden,
+    link: document.getElementById('share-link').value.slice(0, 70),
+    frame: document.getElementById('viewer').src.slice(0, 70),
+    listing: !document.getElementById('listing').hidden,
+    hash: location.hash.slice(0, 70)
+  }))
+  throw new Error(`publishing never settled — ${JSON.stringify(stuck)}`)
+}
+
+/** Put files into the ordinary picker the way a person would. */
+async function pick (page, files) {
+  await page.evaluate(async items => {
+    const data = new DataTransfer()
+    for (const item of items) {
+      const bytes = item.base64
+        ? Uint8Array.from(atob(item.base64), c => c.charCodeAt(0))
+        : item.text
+      data.items.add(new File([bytes], item.name, { type: item.type }))
+    }
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, files)
+}
+
 async function checkSurvivesDeadStorage (page) {
   const wedged = await browser.createBrowserContext()
   const victim = await wedged.newPage()
@@ -1547,7 +1696,8 @@ async function checkMobileLayout () {
 
     // Every dialog: inside the screen, with a gutter, and scrollable to its
     // buttons rather than running off the bottom.
-    for (const id of ['signin-dialog', 'author-dialog', 'diagnostics']) {
+    for (const id of ['signin-dialog', 'author-dialog', 'diagnostics',
+      'isolation-dialog', 'no-entry-dialog']) {
       const fit = await page.evaluate(dialogId => {
         if (dialogId === 'signin-dialog') {
           document.getElementById('signin-step-enter').hidden = false
@@ -1578,6 +1728,21 @@ async function checkMobileLayout () {
       check(`${id} fits a ${phone.name}, with its buttons reachable`,
         fit.gutter && fit.withinHeight && fit.lastButtonReachable, JSON.stringify(fit))
     }
+    // Both ways to choose files are pressed with a thumb here, and the folder
+    // picker is the one that does not work on the device this matters most on.
+    const buttons = await page.evaluate(() => {
+      document.getElementById('welcome').hidden = false
+      return [...document.querySelectorAll('.pick .button')].map(el => {
+        const box = el.getBoundingClientRect()
+        return { w: Math.round(box.width), h: Math.round(box.height), top: Math.round(box.top) }
+      })
+    })
+    check(`both pickers are full-width and stacked on a ${phone.name}`,
+      buttons.length === 2 &&
+      buttons.every(b => b.w > phone.width * 0.6 && b.h >= 40) &&
+      buttons[0].top !== buttons[1].top,
+      JSON.stringify(buttons))
+
     await page.close()
   }
 }
