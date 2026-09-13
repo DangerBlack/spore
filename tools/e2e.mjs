@@ -35,6 +35,25 @@ const COMMENTED_ZIP = 'UEsDBBQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAaW5kZXguaHRtbLPJM
 /** A .zip carrying two entries at the same path, with different contents. */
 const DUPLICATE_PATHS = 'UEsDBBQAAAAIABqSLV2DkPvYDgAAAA4AAAAKAAAAaW5kZXguaHRtbLPJMLQrKMrMzbfRB7IAUEsDBBQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAaW5kZXguaHRtbLPJMLQrTk3Oz0vJt9EHsgFQSwECFAMUAAAACAAaki1dg5D72A4AAAAOAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLAQIUAxQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAAAAAAAAAAACAATYAAABpbmRleC5odG1sUEsFBgAAAAACAAIAcAAAAG4AAAAAAA=='
 
+/**
+ * Archives that must be refused, with the reason each must be refused for.
+ *
+ * These are the security boundary of the archive reader, and until this table
+ * existed the browser check exercised exactly one valid archive: every refusal
+ * below could have been deleted and the suite would still have passed.
+ */
+const REFUSED_ARCHIVES = [
+  { name: 'TRAVERSAL', file: 'traversal.zip', because: 'points outside the archive', base64: 'UEsDBBQAAAAIAAOULV1b+fQWBgAAAAQAAAAQAAAALi4vLi4vZXRjL3Bhc3N3ZCvKzy8BAFBLAQIUAxQAAAAIAAOULV1b+fQWBgAAAAQAAAAQAAAAAAAAAAAAAACAAQAAAAAuLi8uLi9ldGMvcGFzc3dkUEsFBgAAAAABAAEAPgAAADQAAAAAAA==' },
+  { name: 'ABSOLUTE', file: 'absolute.zip', because: 'is an absolute path', base64: 'UEsDBBQAAAAIAAOULV2DFtyMAwAAAAEAAAALAAAAL2V0Yy9zaGFkb3erAABQSwECFAMUAAAACAADlC1dgxbcjAMAAAABAAAACwAAAAAAAAAAAAAAgAEAAAAAL2V0Yy9zaGFkb3dQSwUGAAAAAAEAAQA5AAAALAAAAAAA' },
+  { name: 'BACKSLASH', file: 'backslash.zip', because: 'uses backslashes', base64: 'UEsDBBQAAAAIAAOULV1ZcYfiCAAAAAYAAAANAAAAY3NzXHN0eWxlLmNzc0vKT6msrgUAUEsBAhQDFAAAAAgAA5QtXVlxh+IIAAAABgAAAA0AAAAAAAAAAAAAAIABAAAAAGNzc1xzdHlsZS5jc3NQSwUGAAAAAAEAAQA7AAAAMwAAAAAA' },
+  { name: 'SYMLINK', file: 'symlink.zip', because: 'is a symbolic link', base64: 'UEsDBBQAAAAAAAAAIQBjGzOSDAAAAAwAAAAJAAAAbGluay5odG1sLi4vLi4vc2VjcmV0UEsBAhQDFAAAAAAAAAAhAGMbM5IMAAAADAAAAAkAAAAAAAAAAAAAAP+hAAAAAGxpbmsuaHRtbFBLBQYAAAAAAQABADcAAAAzAAAAAAA=' },
+  { name: 'ENCRYPTED', file: 'encrypted.zip', because: 'is encrypted', base64: 'UEsDBBQAAAAIAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAEACAADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'CORRUPT', file: 'corrupt.zip', because: 'could not be decompressed', base64: 'UEsDBBQAAAAIAAOULV1khh0oGgAAABkAAAAKAAAAaW5kZXguaHRtbEzJMLRLTEpOSU1Lz8jMys7JzcsvsNEHCgIAUEsBAhQDFAAAAAgAA5QtXWSGHSgaAAAAGQAAAAoAAAAAAAAAAAAAAIABAAAAAGluZGV4Lmh0bWxQSwUGAAAAAAEAAQA4AAAAQgAAAAAA' },
+  { name: 'UNKNOWN_METHOD', file: 'unknown-method.zip', because: 'compression method Spore does not read', base64: 'UEsDBBQAAAAJAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACQADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'NOT_UTF8', file: 'not-utf8.zip', because: 'not UTF-8', base64: 'UEsDBBQAAAAIAAOULV1SQcz9CgAAAAoAAAAKAAAA/25kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAA/25kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'NOT_A_ZIP', file: 'not-a-zip.zip', because: 'not a zip archive', base64: 'PGh0bWw+bm90IGFuIGFyY2hpdmUgYXQgYWxsPC9odG1sPg==' }
+]
+
 /** A .zip of a two-file site, for the picker check far below. */
 const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
 
@@ -373,6 +392,14 @@ async function checkPublishingFromThePicker (page) {
     pickers.length === 2 && pickers[1].top - pickers[0].bottom >= 4 &&
     pickers[0].w === pickers[1].w, JSON.stringify(pickers))
 
+  // Every reader downloads the gate and most never publish anything, so the
+  // archive reader is meant to arrive only when an archive does. Checked rather
+  // than asserted in a comment, because a static import would satisfy every
+  // other check in this file while quietly making it a lie.
+  const loadedBefore = await page.evaluate(() => performance.getEntriesByType('resource')
+    .some(entry => entry.name.endsWith('/js/zip.js')))
+  check('the archive reader is not in a reader\u2019s module graph', !loadedBefore)
+
   // --- a .zip, with a folder inside it --------------------------------------
   const before = await page.$eval('#share-link', input => input.value)
   await pick(page, [{ name: 'zipped-site.zip', type: 'application/zip', base64: ZIPPED_SITE }])
@@ -391,6 +418,9 @@ async function checkPublishingFromThePicker (page) {
     colour: getComputedStyle(document.querySelector('h1')).color
   }))
   check('the unpacked site renders out of the swarm', unpacked.heading === 'Unpacked', unpacked.heading)
+  check('and it arrived the moment an archive did',
+    await page.evaluate(() => performance.getEntriesByType('resource')
+      .some(entry => entry.name.endsWith('/js/zip.js'))))
   // The archive's root folder must be stripped exactly as a drop strips it, or
   // `css/style.css` resolves one level too deep and the page loads unstyled.
   check('a subdirectory inside the archive survives, so relative links resolve',
@@ -435,10 +465,24 @@ async function checkPublishingFromThePicker (page) {
   // Not a layout complaint: spore.sig would list the path twice with two
   // hashes, a verifier would check the first and the worker could serve the
   // second, and the site would read as verified while showing unchecked bytes.
-  check('two files at one path are refused before anything can be signed',
-    refused.includes('two files called index.html'), refused.slice(0, 80))
+  check('two entries at one path are refused before anything can be signed',
+    refused.includes('index.html twice'), refused.slice(0, 80))
   check('and the signing question was never asked',
     await page.$eval('#signin-dialog', d => !d.open))
+
+  // The same thing without an archive. A picker can be talked into handing over
+  // two files of one name, so the guard lives where every way in passes, not
+  // only in the zip reader.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>primo</h1>' },
+    { name: 'index.html', type: 'text/html', text: '<h1>secondo</h1>' }
+  ])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  check('and two picked files of one name are refused too, archive or not',
+    (await page.$eval('#error-detail', el => el.textContent)).includes('two files called index.html'))
 
   // A refused publish leaves the error page up, and clearing an already-empty
   // fragment fires no hashchange, so the way back is the button that is there
@@ -446,6 +490,54 @@ async function checkPublishingFromThePicker (page) {
   await page.click('#error-home')
   await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
   check('the way back from a refused archive is one click', true)
+
+  // --- everything the reader must refuse, and why ---------------------------
+  for (const archive of REFUSED_ARCHIVES) {
+    await page.click('#error-home').catch(() => {})
+    await page.evaluate(() => { location.hash = '' })
+    await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+    await pick(page, [{ name: archive.file, type: 'application/zip', base64: archive.base64 }])
+    await page.waitForFunction(
+      () => !document.getElementById('error').hidden, { timeout: 20_000 })
+
+    const said = await page.$eval('#error-detail', el => el.textContent)
+    check(`an archive is refused: ${archive.name.toLowerCase().replace(/_/g, ' ')}`,
+      said.includes(archive.because) &&
+      await page.$eval('#signin-dialog', d => !d.open),
+      said.slice(0, 70))
+  }
+
+  // --- a refused archive dropped rather than picked -------------------------
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const corrupt = REFUSED_ARCHIVES.find(a => a.name === 'CORRUPT')
+  await page.evaluate(b64 => {
+    const data = new DataTransfer()
+    data.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))],
+      'corrupt.zip', { type: 'application/zip' }))
+    document.body.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }))
+  }, corrupt.base64)
+  // The drop handler unpacks too, and that rejection used to go unhandled: the
+  // page did nothing at all, which is the worst of the available answers.
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  check('a refused archive says so when it is dropped, not only when it is picked',
+    (await page.$eval('#error-detail', el => el.textContent)).includes(corrupt.because))
+
+  // --- backing out of signing hands the screen back -------------------------
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'cancelled.html', type: 'text/html', text: '<h1>nope</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.click('#signin-cancel')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('cancelling the signing question gives the drop zone back',
+    await page.$eval('#notice', el => el.hidden))
 
   // --- no entry page at all: a question, not a refusal ----------------------
 
@@ -473,6 +565,30 @@ async function checkPublishingFromThePicker (page) {
   }))
   check('going back publishes nothing and leaves the drop zone in reach',
     !after.signing && after.welcome && after.link === unchanged, JSON.stringify(after).slice(0, 90))
+
+  // --- and the other answer, which is a real thing to publish ---------------
+  await pick(page, [
+    { name: 'one.html', type: 'text/html', text: '<h1>one</h1>' },
+    { name: 'two.html', type: 'text/html', text: '<h1>two</h1>' }
+  ])
+  await page.waitForFunction(
+    () => document.getElementById('no-entry-dialog').open, { timeout: 20_000 })
+  await page.click('#no-entry-accept')
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.click('#signin-skip')
+
+  await page.waitForFunction(
+    () => !document.getElementById('listing').hidden, { timeout: 40_000 })
+  const listed = await page.evaluate(() => ({
+    files: [...document.querySelectorAll('#listing-files a, #listing-files li')]
+      .map(el => el.textContent.trim()).join(' '),
+    summary: document.getElementById('listing-summary').textContent
+  }))
+  check('publishing it as a file list really produces one, and readers get it',
+    listed.files.includes('one.html') && listed.files.includes('two.html'),
+    JSON.stringify(listed).slice(0, 100))
 }
 
 /**

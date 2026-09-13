@@ -1757,8 +1757,15 @@ function wireDropTarget () {
     depth = 0
     highlight(false)
 
-    const { files, name } = await filesFromDrop(event.dataTransfer)
-    seed(files, name)
+    // A dropped archive is unpacked here, and unpacking can refuse: corrupt,
+    // encrypted, over a cap. Without this the rejection was unhandled and the
+    // page simply did nothing, which is the worst of the available answers.
+    try {
+      const { files, name } = await filesFromDrop(event.dataTransfer)
+      await seed(files, name)
+    } catch (err) {
+      fail(err)
+    }
   })
 
   ui.folder.addEventListener('change', () => {
@@ -1813,7 +1820,16 @@ async function seed (files, name) {
   // landing page, and with it the drop zone. A dialog raised over a hidden
   // page would leave nothing to come back to if it were cancelled.
   const decision = await askAboutSigning(name)
-  if (!decision) return
+  if (!decision) {
+    // Backing out must hand the screen back. The picker path hides the landing
+    // page — which is also the drop zone — before this question is asked, and
+    // leaving it hidden is the same shape as the bug that once made signing in
+    // the end of publishing. A site that was already open is left alone: it was
+    // not this publish's to close.
+    ui.notice.hidden = true
+    if (!current) showWelcome()
+    return
+  }
 
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {

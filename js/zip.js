@@ -54,13 +54,6 @@ export class ZipError extends Error {
   }
 }
 
-/** Does this look like an archive, rather than a file to publish as it is? */
-export function isZip (file) {
-  return /\.zip$/i.test(file.name || '') ||
-    file.type === 'application/zip' ||
-    file.type === 'application/x-zip-compressed'
-}
-
 /**
  * Unpack an archive into the same shape a dropped folder produces.
  *
@@ -75,17 +68,18 @@ export async function filesFromZip (blob) {
   const entries = readCentralDirectory(bytes, view)
   if (entries.length === 0) throw new ZipError('That archive has no files in it.')
 
-  let total = 0
+  // Summed from the directory, so an oversized archive is refused before a
+  // single byte is inflated or allocated rather than partway through.
+  const total = entries.reduce((sum, entry) => sum + entry.size, 0)
+  if (total > ZIP_MAX_TOTAL_BYTES) {
+    throw new ZipError(
+      `That archive unpacks to more than ${megabytes(ZIP_MAX_TOTAL_BYTES)}, ` +
+      'which is more than a browser can hold and seed.')
+  }
+
   const files = []
 
   for (const entry of entries) {
-    total += entry.size
-    if (total > ZIP_MAX_TOTAL_BYTES) {
-      throw new ZipError(
-        `That archive unpacks to more than ${megabytes(ZIP_MAX_TOTAL_BYTES)}, ` +
-        'which is more than a browser can hold and seed.')
-    }
-
     const contents = await readEntry(bytes, view, entry)
     const file = new File([contents], basename(entry.path), lastModified(entry))
     file.fullPath = entry.path
@@ -128,6 +122,7 @@ function readCentralDirectory (bytes, view) {
   if (at0 + size > bytes.length) throw new ZipError('That archive is truncated.')
 
   const entries = []
+  const seen = new Set()
   let at = at0
 
   for (let i = 0; i < count; i++) {
@@ -151,14 +146,21 @@ function readCentralDirectory (bytes, view) {
     const commentLength = view.getUint16(at + 32, true)
     const external = view.getUint32(at + 38, true)
 
-    // Bit 11 promises UTF-8. Archives predating it use CP437, and decoding
-    // those as UTF-8 mangles an accented name rather than failing — the better
-    // of two poor outcomes, since the alternative is carrying a code page table
-    // in order to publish a file called `perché.html`.
-    const path = new TextDecoder('utf-8').decode(bytes.subarray(at + 46, at + 46 + nameLength))
+    // Bit 11 promises UTF-8. Archives predating it use CP437, and rather than
+    // carry a code page table to publish a file called `perché.html`, a name
+    // that is not valid UTF-8 is refused. Decoding it loosely would republish
+    // the file under a different name, and every relative link to it would then
+    // resolve to nothing — a silent repair, which is the thing this reader does
+    // not do.
+    const raw = bytes.subarray(at + 46, at + 46 + nameLength)
+    let path
+    try {
+      path = new TextDecoder('utf-8', { fatal: true }).decode(raw)
+    } catch {
+      throw new ZipError('That archive has a file name Spore cannot read; it is not UTF-8.')
+    }
     at += 46 + nameLength + extraLength + commentLength
 
-    if (path.endsWith('/')) continue // a directory entry holds nothing
     if (path === '') throw new ZipError('That archive contains a file with no name.')
 
     if (entry.flags & 0x1) throw new ZipError(`${path} is encrypted.`)
@@ -178,7 +180,17 @@ function readCentralDirectory (bytes, view) {
       throw new ZipError(`${path} is a symbolic link.`)
     }
 
+    // Checked before directory records are dropped. They contribute no file, so
+    // none of this could reach a torrent — but the contract is that an archive
+    // tripping any of these is refused whole, and an archive carrying `../bad/`
+    // is not an archive of a website whether or not the entry holds bytes.
     entry.path = checkPath(path)
+    if (path.endsWith('/')) continue // a directory record holds nothing
+
+    if (seen.has(entry.path)) {
+      throw new ZipError(`That archive contains ${entry.path} twice.`)
+    }
+    seen.add(entry.path)
     entries.push(entry)
   }
 
@@ -194,7 +206,14 @@ function readCentralDirectory (bytes, view) {
  * its author saw it locally.
  */
 function checkPath (path) {
-  const normalized = path.replace(/\\/g, '/')
+  // Rewritten separators were the one repair this made, and it contradicted its
+  // own contract: `css\style.css` would be published at `css/style.css`, a path
+  // its author never wrote. The zip format says forward slashes, so a backslash
+  // means a tool that got it wrong, and that is the author's to fix.
+  if (path.includes('\\')) {
+    throw new ZipError(`${path} uses backslashes, which a zip may not.`)
+  }
+  const normalized = path
 
   if (normalized.startsWith('/')) throw new ZipError(`${path} is an absolute path.`)
   if (/^[a-z]:/i.test(normalized)) throw new ZipError(`${path} names a drive.`)
@@ -265,8 +284,15 @@ async function readEntry (bytes, view, entry) {
 }
 
 async function inflate (raw, entry) {
-  const stream = new Blob([raw]).stream()
-    .pipeThrough(new DecompressionStream('deflate-raw'))
+  // Constructing this throws synchronously where `deflate-raw` is unknown, and
+  // that error escaped as a raw platform exception with nothing in it for the
+  // person holding the archive. Older than Safari 16.4 is the realistic case.
+  let stream
+  try {
+    stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  } catch {
+    throw new ZipError('This browser cannot unpack zip archives. It is too old.')
+  }
 
   const chunks = []
   let total = 0

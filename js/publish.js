@@ -10,7 +10,6 @@
 
 import { chooseEntry } from './site.js'
 import { seedTorrent } from './swarm.js'
-import { filesFromZip, isZip } from './zip.js'
 
 /**
  * Pull a full file tree out of a drop.
@@ -73,10 +72,23 @@ export async function filesFromPicker (files) {
 }
 
 async function fromLooseFiles (files) {
-  if (files.length === 1 && isZip(files[0])) return await filesFromZip(files[0])
+  if (files.length === 1 && looksLikeZip(files[0])) {
+    // Imported here and nowhere else. Every reader downloads the gate, and most
+    // of them never publish anything; the archive reader is dead weight until
+    // somebody actually hands one over. The test above is inline for the same
+    // reason — importing a module to ask whether to import it defeats the point.
+    const { filesFromZip } = await import('./zip.js')
+    return await filesFromZip(files[0])
+  }
 
   for (const file of files) file.fullPath = file.fullPath || file.name
   return { files, name: null }
+}
+
+function looksLikeZip (file) {
+  return /\.zip$/i.test(file.name || '') ||
+    file.type === 'application/zip' ||
+    file.type === 'application/x-zip-compressed'
 }
 
 /**

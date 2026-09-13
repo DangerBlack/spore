@@ -81,8 +81,9 @@ Two details to get right rather than assume:
 - **The publish rule must mirror the read rule exactly**, not approximately.
   "Would `findEntry` find an entry in this?" is the question, and anything else
   will diverge the first time one of them is touched. If it would not — two
-  pages and no index — refuse before the signing dialog, with a message that
-  says which files were picked and what is missing.
+  pages and no index — say so before the signing dialog, listing what was
+  picked, and let the author go back or publish it as the file list it is. A
+  question, not a refusal: the gate renders such a torrent perfectly well.
 - **The torrent's name.** A folder gives one; a handful of loose files does not.
   What appears in `dn=`, and therefore in every shared link, needs deciding
   rather than inheriting whatever the client picks.
