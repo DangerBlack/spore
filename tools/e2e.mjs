@@ -50,8 +50,13 @@ const REFUSED_ARCHIVES = [
   { name: 'ENCRYPTED', file: 'encrypted.zip', because: 'is encrypted', base64: 'UEsDBBQAAAAIAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAEACAADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
   { name: 'CORRUPT', file: 'corrupt.zip', because: 'could not be decompressed', base64: 'UEsDBBQAAAAIAAOULV1khh0oGgAAABkAAAAKAAAAaW5kZXguaHRtbEzJMLRLTEpOSU1Lz8jMys7JzcsvsNEHCgIAUEsBAhQDFAAAAAgAA5QtXWSGHSgaAAAAGQAAAAoAAAAAAAAAAAAAAIABAAAAAGluZGV4Lmh0bWxQSwUGAAAAAAEAAQA4AAAAQgAAAAAA' },
   { name: 'UNKNOWN_METHOD', file: 'unknown-method.zip', because: 'compression method Spore does not read', base64: 'UEsDBBQAAAAJAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACQADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
-  { name: 'NOT_UTF8', file: 'not-utf8.zip', because: 'not UTF-8', base64: 'UEsDBBQAAAAIAAOULV1SQcz9CgAAAAoAAAAKAAAA/25kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAA/25kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
-  { name: 'NOT_A_ZIP', file: 'not-a-zip.zip', because: 'not a zip archive', base64: 'PGh0bWw+bm90IGFuIGFyY2hpdmUgYXQgYWxsPC9odG1sPg==' }
+  { name: 'NOT_UTF8', file: 'not-utf8.zip', because: 'not UTF-8', base64: 'UEsDBBQAAAgIAPGYLV1SQcz9CgAAAAoAAAALAAAAaW5kZXj/Lmh0bWyzyTC0q7DRB5IAUEsBAhQDFAAACAgA8ZgtXVJBzP0KAAAACgAAAAsAAAAAAAAAAAAAAIABAAAAAGluZGV4/y5odG1sUEsFBgAAAAABAAEAOQAAADMAAAAAAA==' },
+  { name: 'NOT_A_ZIP', file: 'not-a-zip.zip', because: 'not a zip archive', base64: 'PGh0bWw+bm90IGFuIGFyY2hpdmUgYXQgYWxsPC9odG1sPg==' },
+  { name: 'DOT_SEGMENT', file: 'dot-segment.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAARAAAAc2l0ZS8uL2luZGV4Lmh0bWyzyTC0q7DRB5IAUEsBAhQDFAAAAAgAUpgtXVJBzP0KAAAACgAAABEAAAAAAAAAAAAAAIABAAAAAHNpdGUvLi9pbmRleC5odG1sUEsFBgAAAAABAAEAPwAAADkAAAAAAA==' },
+  { name: 'EMPTY_SEGMENT', file: 'empty-segment.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAQAAAAc2l0ZS8vaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAAEAAAAAAAAAAAAAAAgAEAAAAAc2l0ZS8vaW5kZXguaHRtbFBLBQYAAAAAAQABAD4AAAA4AAAAAAA=' },
+  { name: 'LEGACY_NAME', file: 'legacy-name.zip', because: 'legacy character set', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjDqS5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMOpLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
+  { name: 'C1_CONTROL', file: 'c1-control.zip', because: 'control characters', base64: 'UEsDBBQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjCny5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMKfLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
+  { name: 'TRUNCATED_INDEX', file: 'truncated-index.zip', because: 'index is truncated', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAA9AEAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' }
 ]
 
 /**
@@ -400,6 +405,30 @@ async function checkPublishingFromThePicker (page) {
   check('the two pickers are a column of equal buttons that do not touch',
     pickers.length === 2 && pickers[1].top - pickers[0].bottom >= 4 &&
     pickers[0].w === pickers[1].w, JSON.stringify(pickers))
+
+  // Reachable without a mouse. `hidden` on the input took both pickers out of
+  // the focus order entirely: the label is not focusable and a span is not a
+  // control, so a keyboard could not open either one and a screen reader was
+  // offered nothing to press.
+  const reachable = await page.evaluate(() => {
+    const out = []
+    for (const id of ['folder-input', 'files-input']) {
+      const input = document.getElementById(id)
+      input.focus()
+      const label = input.closest('label')
+      out.push({
+        id,
+        focused: document.activeElement === input,
+        named: (label?.textContent ?? '').trim().length > 0,
+        painted: getComputedStyle(label).outlineStyle !== 'none'
+      })
+    }
+    return out
+  })
+  check('both pickers can be reached and pressed without a mouse',
+    reachable.every(r => r.focused && r.named), JSON.stringify(reachable))
+  check('and focusing one is visible, since the label is what looks like a button',
+    reachable.every(r => r.painted), JSON.stringify(reachable))
 
   // Every reader downloads the gate and most never publish anything, so the
   // archive reader is meant to arrive only when an archive does. Checked rather

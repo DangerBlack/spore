@@ -203,15 +203,29 @@ button:hover, .button:hover { border-color: var(--accent); }
 
 /* Stacked at every width, and equal, because they never fit side by side: the
    card is 278px and the two together want 322. Ragged pills under each other
-   read as an accident; a column of equal ones reads as two ways in.
-
-   Block rather than inline, too. Vertical padding on an inline element paints
-   outside its line box without making the line any taller, so two of these
-   overlapped by exactly that padding — invisible with one button, which is how
-   it survived until there were two. */
+   read as an accident; a column of equal ones reads as two ways in. */
 .pick .button {
   display: block;
   text-align: center;
+}
+
+/* Invisible, but still in the focus order and still announced. `hidden` is
+   `display: none`, which takes a control out of the keyboard path entirely;
+   this leaves it exactly where it is and gives it no size. */
+.pick input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The label is the button, so the focus ring has to be drawn on the label when
+   the input inside it is focused — otherwise a keyboard user is somewhere with
+   nothing to show for it. */
+.pick .button:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .button.secondary {
