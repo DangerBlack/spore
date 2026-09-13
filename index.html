@@ -145,13 +145,30 @@
 
       <section class="choice" id="dropzone">
         <h2>Publish your own</h2>
-        <p class="muted">Drop a folder anywhere on this page. It needs an
-           <code>index.html</code> at the top and relative links. It is hashed
-           here in your browser, and this tab becomes its first seed.</p>
-        <label class="pick">
-          <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-          <span class="button">Choose a folder…</span>
-        </label>
+        <p class="muted">A folder, a <code>.zip</code> of one, or a page and
+           its files. Relative links, and an <code>index.html</code> if you have
+           one. It is hashed here in your browser, and this tab becomes its
+           first seed.</p>
+
+        <!--
+          Two pickers rather than one, because they are different pickers. The
+          folder input is the better path where it exists, and on iOS it does
+          not exist at all: `webkitdirectory` quietly degrades to picking single
+          files, and there is no folder to drag either. The second input is the
+          ordinary file picker, which works everywhere and reaches Files,
+          iCloud Drive and every other document provider — so an archive is how
+          a folder gets in on a phone.
+        -->
+        <div class="pick">
+          <label>
+            <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+            <span class="button">Choose a folder…</span>
+          </label>
+          <label>
+            <input id="files-input" type="file" multiple hidden>
+            <span class="button secondary">Choose files or a .zip…</span>
+          </label>
+        </div>
 
         <!--
           Signing is optional and separate from publishing. A site published
@@ -189,7 +206,7 @@
 </main>
 
 <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
-  <p>Drop the folder to publish it</p>
+  <p>Drop it to publish it</p>
 </div>
 
 <footer class="statusbar">
@@ -230,7 +247,7 @@
   </div>
 
   <section id="signin-step-choose" hidden>
-    <p class="muted small">Publishing <strong id="signin-what">this folder</strong>.</p>
+    <p class="muted small">Publishing <strong id="signin-what">these files</strong>.</p>
     <div class="identity-card">
       <span id="signin-known-avatar" class="avatar avatar--large" aria-hidden="true"></span>
       <div>
@@ -429,6 +446,36 @@
   <div class="dialog-actions">
     <button id="isolation-refuse" type="button" class="link">Do not show sites</button>
     <button id="isolation-accept" type="button">Show sites anyway</button>
+  </div>
+</dialog>
+
+<!--
+  A folder with no entry page is not an error. The gate renders one as a
+  browsable list of files, and that is sometimes exactly what someone means to
+  publish. It is, however, rarely what someone means by "my website", and the
+  moment to find out is before a magnet exists and before anything is signed.
+-->
+<dialog id="no-entry-dialog">
+  <div class="dialog-head">
+    <h2>There is no page to open</h2>
+  </div>
+
+  <p>Nothing here is named <code>index.html</code>, and there is more than one
+     HTML file, so Spore cannot tell which page a visitor should land on.</p>
+
+  <p>Published as it is, this becomes a <strong>browsable list of files</strong>
+     rather than a site: readers see the names below and open them one at a
+     time. That is a real thing to publish. It is just rarely what someone means
+     by a website.</p>
+
+  <ul id="no-entry-files" class="no-entry-files"></ul>
+
+  <p class="muted small">To get a page instead: rename the one readers should
+     land on to <code>index.html</code>, or publish only that page.</p>
+
+  <div class="dialog-actions">
+    <button id="no-entry-cancel" type="button" class="link">Go back</button>
+    <button id="no-entry-accept" type="button">Publish as a file list</button>
   </div>
 </dialog>
 

@@ -195,14 +195,27 @@ button:hover, .button:hover { border-color: var(--accent); }
 /* Its own line, with room under it. As an inline-block with no margin the
    button sat flush against the paragraph below, which reads as overlapping. */
 .pick {
-  display: inline-block;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 4px 0 18px;
 }
 
+/* The folder picker is the better path and leads. The file picker is the one
+   that works where no folder picker exists, which is also where the buttons
+   are hardest to hit — hence the stacking below. */
+.button.secondary {
+  background: transparent;
+  color: var(--muted);
+}
+
+.button.secondary:hover { color: var(--ink); }
+
 @media (max-width: 560px) {
-  /* Full width and a bigger target: this is the button people press on a
-     phone, and it was the smallest thing on the card. */
+  /* Full width and a bigger target: these are the buttons people press on a
+     phone, and they were the smallest thing on the card. */
   .pick { display: block; }
+  .pick label + label { display: block; margin-top: 8px; }
   .pick .button { display: block; text-align: center; padding: 12px; }
 }
 
@@ -799,3 +812,20 @@ body.is-dragging .drop-overlay { display: flex; }
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* --- publishing something with no entry page ---------------------------- */
+
+.no-entry-files {
+  margin: 0 0 14px;
+  padding: 10px 12px 10px 28px;
+  max-height: 180px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.no-entry-files li { margin: 2px 0; word-break: break-all; }
+.no-entry-files li.muted { font-family: inherit; list-style: none; margin-left: -16px; }

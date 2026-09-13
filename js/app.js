@@ -12,7 +12,7 @@ import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
-import { checkPublishable, filesFromDrop, filesFromInput, publish } from './publish.js'
+import { checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
   publicNameFor, publishedSeries, recordPublished, rememberKeyOnDevice,
@@ -73,6 +73,11 @@ const ui = {
   errorRef: el('error-ref'),
   errorRetry: el('error-retry'),
   errorHome: el('error-home'),
+  filesInput: el('files-input'),
+  noEntryDialog: el('no-entry-dialog'),
+  noEntryFiles: el('no-entry-files'),
+  noEntryAccept: el('no-entry-accept'),
+  noEntryCancel: el('no-entry-cancel'),
   listing: el('listing'),
   listingName: el('listing-name'),
   listingSummary: el('listing-summary'),
@@ -493,7 +498,7 @@ async function render (torrent, entry) {
  * @returns {Promise<{sign: boolean}|null>} null if the publisher backed out
  */
 function askAboutSigning (what) {
-  ui.signinWhat.textContent = what ?? 'this folder'
+  ui.signinWhat.textContent = what ?? 'these files'
   ui.passphrase.value = ''
 
   // Offered back rather than asked for again. A publisher who named their key
@@ -623,6 +628,59 @@ function askAboutSigning (what) {
       ui.signinCancel.removeEventListener('click', onCancel)
       ui.signinDismiss.removeEventListener('click', onCancel)
       ui.signinDialog.removeEventListener('close', onClose)
+    }
+  })
+}
+
+/**
+ * Tell an author their files will open as a list, and let them go back.
+ *
+ * Deliberately a question and not an error: `chooseEntry` is the same rule the
+ * viewer uses, so this is Spore reporting what a reader will actually land on,
+ * which is a thing the author is in a position to change and nobody else is.
+ *
+ * @returns {Promise<boolean>} whether to publish it anyway
+ */
+function askAboutMissingEntry (files) {
+  const paths = files
+    .map(file => file.fullPath || file.name)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 12)
+
+  ui.noEntryFiles.replaceChildren(...paths.map(path => {
+    const item = document.createElement('li')
+    item.textContent = path
+    return item
+  }))
+  if (files.length > paths.length) {
+    const more = document.createElement('li')
+    more.className = 'muted'
+    more.textContent = `and ${files.length - paths.length} more`
+    ui.noEntryFiles.append(more)
+  }
+
+  ui.noEntryDialog.showModal()
+
+  return new Promise(resolve => {
+    const answer = publishAnyway => {
+      ui.noEntryDialog.close()
+      cleanup()
+      resolve(publishAnyway)
+    }
+
+    const onAccept = () => answer(true)
+    const onCancel = () => answer(false)
+    // Dismissing is going back, not agreeing.
+    const onClose = () => { cleanup(); resolve(false) }
+
+    ui.noEntryAccept.addEventListener('click', onAccept)
+    ui.noEntryCancel.addEventListener('click', onCancel)
+    ui.noEntryDialog.addEventListener('close', onClose)
+
+    function cleanup () {
+      ui.noEntryAccept.removeEventListener('click', onAccept)
+      ui.noEntryCancel.removeEventListener('click', onCancel)
+      ui.noEntryDialog.removeEventListener('close', onClose)
     }
   })
 }
@@ -1706,6 +1764,25 @@ function wireDropTarget () {
     seed(files, name)
     ui.folder.value = '' // let the same folder be picked twice
   })
+
+  ui.filesInput.addEventListener('change', async () => {
+    const picked = [...ui.filesInput.files]
+    ui.filesInput.value = ''
+    if (picked.length === 0) return
+
+    // Unpacking happens before `seed`, and can fail on its own terms — a
+    // damaged or refused archive is not a publishing error, it is an answer
+    // about this file, and it should read as one.
+    busy(picked.length === 1 && /\.zip$/i.test(picked[0].name)
+      ? `Opening ${picked[0].name}…`
+      : 'Reading…')
+    try {
+      const { files, name } = await filesFromPicker(picked)
+      await seed(files, name)
+    } catch (err) {
+      fail(err)
+    }
+  })
 }
 
 async function seed (files, name) {
@@ -1714,12 +1791,20 @@ async function seed (files, name) {
   }
 
   // Checked before the publisher is asked anything. Being asked whether to
-  // sign a folder, and only then told it had no index.html, is a poor way to
-  // find out.
+  // sign a folder, and only then told it was empty, is a poor way to find out.
   try {
     checkPublishable(files)
   } catch (err) {
     return fail(err)
+  }
+
+  // Not a refusal. A set of files with no entry page publishes perfectly well
+  // and renders as a browsable list, which is occasionally the point — but it
+  // is rarely what someone means by "my site", and this is the last moment
+  // before a magnet exists and a signature covers it.
+  if (!entryFor(files) && !await askAboutMissingEntry(files)) {
+    showWelcome()
+    return
   }
 
   // Asked before anything is hashed, and before `busy()` — which hides the
