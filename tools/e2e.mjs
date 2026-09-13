@@ -353,6 +353,7 @@ async function run () {
   await checkPublishingFromThePicker(page)
   await checkSignatureLandsWhereReadersLook()
   await checkArchiveWithSomethingBesideTheSite()
+  await checkWhatMustNotBeSigned()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -824,6 +825,88 @@ async function checkArchiveWithSomethingBesideTheSite () {
   const verdict = await page.$eval('#author', el => el.dataset.state)
   check('and the site it publishes reads as verified, not as tampered with',
     verdict === 'verified', verdict)
+
+  await page.close()
+}
+
+/**
+ * Two things the gate must not sign, found by looking rather than by review.
+ *
+ * Both are the shape every real finding on this branch has had: two pieces of
+ * code answering one question differently, agreeing on everything anyone had
+ * tried, and disagreeing on an input nobody had.
+ */
+async function checkWhatMustNotBeSigned () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  // --- a file list spread over directories is not a site with strays ---------
+  // `rootFor` falls back to the first file when there is no entry page, which
+  // is meant for naming a torrent. Scoping to it would drop every other branch
+  // and then announce a "site" that never existed.
+  const spread = await page.evaluate(async () => {
+    const { siteFiles } = await import('/js/publish.js')
+    const file = path => Object.assign(new File(['x'], path.split('/').pop()), { fullPath: path })
+    const listed = siteFiles([file('docs/one.html'), file('notes/two.html')])
+    const site = siteFiles([file('site/index.html'), file('__MACOSX/x')])
+    return {
+      listedKept: listed.files.length,
+      listedOutside: listed.outside.length,
+      siteKept: site.files.map(f => f.fullPath),
+      siteOutside: site.outside.map(f => f.fullPath)
+    }
+  })
+  check('files with no entry page are all published, not scoped to the first one',
+    spread.listedKept === 2 && spread.listedOutside === 0, JSON.stringify(spread))
+  check('and a real site still leaves what is not part of it behind',
+    spread.siteOutside.length === 1 && spread.siteKept.length === 1, JSON.stringify(spread))
+
+  // --- a folder that already declares somebody else's key --------------------
+  // Republishing another person's site is supported. Signing it is not: the
+  // signature is checked against the key the site declares, and a mismatch
+  // reads as "altered", not as "signed by someone else". The publisher is taken
+  // through the whole signing ceremony here on purpose — that is where an
+  // identity arrives, and a guard that only looked before it protected nobody
+  // publishing for the first time.
+  const theirKey = 'f'.repeat(64)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>a mirror</h1>' },
+    { name: 'spore.pub', type: 'text/plain', text: `${theirKey}\nname=Somebody Else\n` }
+  ])
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.type('#signin-label', 'Mirroring')
+  await page.type('#signin-passphrase', 'a passphrase belonging to whoever mirrors')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'mirror')
+  await page.click('#signin-use-known')
+
+  await page.waitForFunction(
+    () => !document.getElementById('share').hidden, { timeout: 40_000 })
+
+  const said = await page.evaluate(() => document.getElementById('share-unsigned').hidden
+    ? '' : document.getElementById('share-unsigned').textContent)
+  check('the publisher is told their key was not written over somebody else\u2019s',
+    said.includes('signed by nobody'), said.slice(0, 70))
+
+  const files = await page.evaluate(async () => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = getClient().torrents[getClient().torrents.length - 1]
+    return torrent.files.map(f => f.path)
+  })
+  check('and no signature is written that every reader would read as tampering',
+    !files.some(path => /spore\.sig$/.test(path)), JSON.stringify(files))
+  check('while the key the site declares is left exactly as it was',
+    files.some(path => /spore\.pub$/.test(path)), JSON.stringify(files))
 
   await page.close()
 }
@@ -2057,7 +2140,7 @@ async function checkMobileLayout () {
     // Every dialog: inside the screen, with a gutter, and scrollable to its
     // buttons rather than running off the bottom.
     for (const id of ['signin-dialog', 'author-dialog', 'diagnostics',
-      'isolation-dialog', 'no-entry-dialog']) {
+      'isolation-dialog', 'no-entry-dialog', 'outside-dialog']) {
       const fit = await page.evaluate(dialogId => {
         if (dialogId === 'signin-dialog') {
           document.getElementById('signin-step-enter').hidden = false

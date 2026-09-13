@@ -213,18 +213,24 @@ export function rootFor (files) {
  * repair this codebase refuses everywhere else.
  *
  * @param {File[]} files
- * @returns {{files: File[], outside: File[]}}
+ * @returns {{files: File[], root: string, outside: File[]}}
  */
 export function siteFiles (files) {
-  const root = rootFor(files)
-  if (!root) return { files, outside: [] }
+  // Asked of the entry itself, not of `rootFor`, whose fallback to the first
+  // file is meant for naming a torrent and means nothing here. A set with no
+  // entry page is a file list, not a site with strays around it: scoping it to
+  // whichever file happened to come first would quietly drop the rest and then
+  // announce a "site" that was never there.
+  const entry = entryFor(files)
+  if (!entry || !entry.includes('/')) return { files, root: '', outside: [] }
 
+  const root = entry.slice(0, entry.lastIndexOf('/') + 1)
   const inside = []
   const outside = []
   for (const file of files) {
     ;((file.fullPath || file.name).startsWith(root) ? inside : outside).push(file)
   }
-  return { files: inside, outside }
+  return { files: inside, root, outside }
 }
 
 async function collect (entry, out, prefix = '') {
