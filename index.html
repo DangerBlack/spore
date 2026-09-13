@@ -160,13 +160,21 @@
           a folder gets in on a phone.
         -->
         <div class="pick">
-          <label>
-            <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-            <span class="button">Choose a folder…</span>
+          <!--
+            The input is taken out of the layout by CSS rather than by `hidden`.
+            `hidden` is `display: none`, which removes it from the focus order
+            too: the label is not focusable and the span is not a control, so
+            there was no way to reach either picker with a keyboard at all, and
+            a screen reader was offered nothing to press. It is still invisible;
+            it is simply still there.
+          -->
+          <label class="button">
+            <input id="folder-input" type="file" webkitdirectory directory multiple>
+            Choose a folder…
           </label>
-          <label>
-            <input id="files-input" type="file" multiple hidden>
-            <span class="button secondary">Choose files or a zip…</span>
+          <label class="button secondary">
+            <input id="files-input" type="file" multiple>
+            Choose files or a zip…
           </label>
         </div>
 

@@ -61,6 +61,14 @@ export class ZipError extends Error {
  *   file, the single shared root folder stripped, exactly as a drop gives.
  */
 export async function filesFromZip (blob) {
+  // Checked before the bytes are read, not after. Every cap below is derived
+  // from the archive's own index, and reaching that index means holding the
+  // whole file in memory first — so a large enough archive exhausts a phone
+  // before it has said anything about itself.
+  if (blob.size > ZIP_MAX_TOTAL_BYTES) {
+    throw new ZipError(`That archive is larger than ${megabytes(ZIP_MAX_TOTAL_BYTES)}.`)
+  }
+
   const bytes = new Uint8Array(await blob.arrayBuffer())
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
@@ -145,6 +153,15 @@ function readCentralDirectory (bytes, view) {
     const commentLength = view.getUint16(at + 32, true)
     const external = view.getUint32(at + 38, true)
 
+    // The record must lie inside the directory the end record declared. Without
+    // this the name was read from a `subarray` that silently clamps at the end
+    // of the file — a truncated archive producing a plausible short name — and
+    // the next lap read past the end and threw a raw RangeError.
+    const end = at + 46 + nameLength + extraLength + commentLength
+    if (end > at0 + size || end > bytes.length) {
+      throw new ZipError('That archive’s index is truncated.')
+    }
+
     // Bit 11 promises UTF-8. Archives predating it use CP437, and rather than
     // carry a code page table to publish a file called `perché.html`, a name
     // that is not valid UTF-8 is refused. Decoding it loosely would republish
@@ -152,13 +169,21 @@ function readCentralDirectory (bytes, view) {
     // resolve to nothing — a silent repair, which is the thing this reader does
     // not do.
     const raw = bytes.subarray(at + 46, at + 46 + nameLength)
+    // Bit 11 is the archive's promise that its names are UTF-8. Without it they
+    // are CP437, and some CP437 byte pairs are valid UTF-8 by coincidence — so
+    // checking the decode alone would let exactly those through under a
+    // different name. Non-ASCII is refused unless the promise was made.
+    if (!(entry.flags & 0x800) && raw.some(byte => byte > 0x7f)) {
+      throw new ZipError(
+        'That archive uses a legacy character set for a file name, which Spore cannot read.')
+    }
     let path
     try {
       path = new TextDecoder('utf-8', { fatal: true }).decode(raw)
     } catch {
       throw new ZipError('That archive has a file name Spore cannot read; it is not UTF-8.')
     }
-    at += 46 + nameLength + extraLength + commentLength
+    at = end
 
     if (path === '') throw new ZipError('That archive contains a file with no name.')
 
@@ -202,27 +227,38 @@ function readCentralDirectory (bytes, view) {
  * None of these would escape anything here — nothing is written to a disk, and
  * the paths become torrent entries — but an archive containing one is not an
  * archive of a website, and a torrent laid out from it would not render the way
- * its author saw it locally.
+ * its author saw it locally. Nothing is repaired: the path is returned exactly
+ * as the archive spelled it, or the archive is refused.
  */
 function checkPath (path) {
   // Rewritten separators were the one repair this made, and it contradicted its
-  // own contract: `css\style.css` would be published at `css/style.css`, a path
+  // own contract: `css\\style.css` would be published at `css/style.css`, a path
   // its author never wrote. The zip format says forward slashes, so a backslash
   // means a tool that got it wrong, and that is the author's to fix.
   if (path.includes('\\')) {
     throw new ZipError(`${path} uses backslashes, which a zip may not.`)
   }
-  const normalized = path
+  if (path.startsWith('/')) throw new ZipError(`${path} is an absolute path.`)
+  if (/^[a-z]:/i.test(path)) throw new ZipError(`${path} names a drive.`)
 
-  if (normalized.startsWith('/')) throw new ZipError(`${path} is an absolute path.`)
-  if (/^[a-z]:/i.test(normalized)) throw new ZipError(`${path} names a drive.`)
-  if (normalized.split('/').some(part => part === '..')) {
-    throw new ZipError(`${path} points outside the archive.`)
+  // `..` escapes, and `.` or an empty component is a path that means one thing
+  // to the torrent builder and another to `new URL()` in the viewer: the signer
+  // would record `./index.html` while a reader resolved `index.html`, and the
+  // site would fail to verify for a reason nobody could see.
+  const parts = path.split('/')
+  if (parts.includes('..')) throw new ZipError(`${path} points outside the archive.`)
+  // Every component but the last, which is empty exactly when this is a
+  // directory record and is meant to be.
+  if (parts.slice(0, -1).some(part => part === '' || part === '.')) {
+    throw new ZipError(`${path} is not a plain path.`)
   }
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+
+  // C0, DEL and C1. The stated rule is "no control characters", and a range
+  // that stopped at DEL was not that rule.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(path)) {
     throw new ZipError('That archive contains a file name with control characters in it.')
   }
-  return normalized
+  return path
 }
 
 /**
