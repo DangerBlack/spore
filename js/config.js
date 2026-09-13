@@ -73,18 +73,27 @@ export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-13.8'
+export const GATE_VERSION = '2026-09-13.9'
 
 /**
- * How much a .zip may unpack to, in total and per file.
+ * What a .zip may be: how large, how large unpacked, and how many files.
  *
  * These are not security limits so much as honesty limits: a browser publishing
  * a site holds it in memory and seeds it from there, so an archive larger than
  * this produces a tab that dies rather than a site that spreads. Refusing early,
  * by name, beats a crash the author cannot interpret.
  *
- * Provisional. They should come from measuring what a mid-range phone can
- * actually hash and seed, which has not been done yet.
+ * Be clear about what they do *not* bound. Unpacking holds the compressed
+ * archive and the unpacked files at the same time, so the peak is roughly the
+ * sum of the two — an archive at the byte cap needs something nearer twice it
+ * before WebTorrent has hashed anything. And bytes are not the only budget: a
+ * file costs a File, a torrent entry, a manifest line and a row in the listing
+ * whether or not it contains anything, which is why there is a count.
+ *
+ * All three are provisional, and the byte ones are deliberately well under what
+ * a desktop could manage. They should come from measuring a mid-range phone,
+ * which has not been done.
  */
-export const ZIP_MAX_TOTAL_BYTES = 128_000_000
-export const ZIP_MAX_ENTRY_BYTES = 64_000_000
+export const ZIP_MAX_TOTAL_BYTES = 64_000_000
+export const ZIP_MAX_ENTRY_BYTES = 32_000_000
+export const ZIP_MAX_ENTRIES = 2_000

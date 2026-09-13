@@ -78,6 +78,16 @@ that, precisely, is what the zip is for.
 
 Two details to get right rather than assume:
 
+- **The site is the entry page's subtree, and nothing else travels with it.**
+  A reader is scoped to that directory — `readSporePub` looks beside the entry
+  and `verifyContent` lists what is under it — so anything at another top level
+  can neither be reached nor checked. Signing it anyway produced a manifest
+  describing files no verifier could see, which reads as *broken*: the site
+  accusing itself of having been altered. This is not an exotic shape. It is
+  what macOS's "Compress" produces, `__MACOSX/` beside the folder. What is left
+  out is named in a dialog before anything is signed, because dropping files
+  from somebody's publication without saying so is the repair this refuses
+  everywhere else.
 - **A file list cannot be signed, and is not offered the chance.** A reader's
   check reads `spore.pub` and `spore.sig` from beside the entry page, and a
   listing has no entry page, so the gate shows one as "unsigned" whatever it

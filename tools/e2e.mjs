@@ -56,7 +56,9 @@ const REFUSED_ARCHIVES = [
   { name: 'EMPTY_SEGMENT', file: 'empty-segment.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAQAAAAc2l0ZS8vaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAAEAAAAAAAAAAAAAAAgAEAAAAAc2l0ZS8vaW5kZXguaHRtbFBLBQYAAAAAAQABAD4AAAA4AAAAAAA=' },
   { name: 'LEGACY_NAME', file: 'legacy-name.zip', because: 'legacy character set', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjDqS5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMOpLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
   { name: 'C1_CONTROL', file: 'c1-control.zip', because: 'control characters', base64: 'UEsDBBQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjCny5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMKfLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
-  { name: 'TRUNCATED_INDEX', file: 'truncated-index.zip', because: 'index is truncated', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAA9AEAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' }
+  { name: 'TRUNCATED_INDEX', file: 'truncated-index.zip', because: 'index is truncated', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAA9AEAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'TOO_MANY', file: 'too-many.zip', because: 'more than 2000 files', base64: 'UEsDBBQAAAAIAAWcLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAAFnC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAQJxAnDgAAAAyAAAAAAA=' },
+  { name: 'TRAILING_DOT', file: 'trailing-dot.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAPebLV2DFtyMAwAAAAEAAAAGAAAAc2l0ZS8uqwAAUEsBAhQDFAAAAAgA95stXYMW3IwDAAAAAQAAAAYAAAAAAAAAAAAAAIABAAAAAHNpdGUvLlBLBQYAAAAAAQABADQAAAAnAAAAAAA=' }
 ]
 
 /**
@@ -66,6 +68,15 @@ const REFUSED_ARCHIVES = [
  * in array order, which an archive chooses.
  */
 const ORDERED_ZIP = 'UEsDBBQAAAAIAPCVLV1qlh8DKAAAADMAAAARAAAAbmVzdGVkL2luZGV4Lmh0bWyzUUzJTy6pLEhVyCjJzbGzKcksyUm1y0stLklNsdGH8GwyDOEiQCYAUEsDBBQAAAAIAPCVLV20QKIBKwAAADUAAAAKAAAAaW5kZXguaHRtbLNRTMlPLqksSFXIKMnNsbMpySzJSbUrzkjMyckvt9GHcG0yDO2CYUJANgBQSwECFAMUAAAACADwlS1dapYfAygAAAAzAAAAEQAAAAAAAAAAAAAAgAEAAAAAbmVzdGVkL2luZGV4Lmh0bWxQSwECFAMUAAAACADwlS1dtECiASsAAAA1AAAACgAAAAAAAAAAAAAAgAFXAAAAaW5kZXguaHRtbFBLBQYAAAAAAgACAHcAAACqAAAAAAA='
+
+/**
+ * What macOS's own "Compress" produces: the folder, and `__MACOSX/` beside it.
+ *
+ * Two top levels, and the second one is not part of the site. Signing hashed it
+ * anyway while verification never looked there, so an ordinary Mac-made archive
+ * published a site that accused itself of having been altered.
+ */
+const MAC_STYLE_ZIP = 'UEsDBBQAAAAIAPebLV1MPnfMXAAAAGsAAAAPAAAAc2l0ZS9pbmRleC5odG1sLYsxDoMwEAS/4riHiC7F4R/wCMssOsSZIN+m4PcBJdWMRhp5zO/C80BQVktSwRyK5ubgGD9culdMwpWGVHOR50/F1n0LDTZG52lwBRiDNiz/0hf369QhTfd28QtQSwMEFAAAAAgA95stXRfKoaoXAAAAFQAAAA4AAABzaXRlL3N0eWxlLmNzc8swrE7Oz8kvsipKT9Kw1LE00LHUrAUAUEsDBBQAAAAIAPebLV1SI2NAFgAAABYAAAAaAAAAX19NQUNPU1gvc2l0ZS8uX2luZGV4Lmh0bWwrSi3OLy1KTlVIyy/KVsjLzytOBSIAUEsBAhQDFAAAAAgA95stXUw+d8xcAAAAawAAAA8AAAAAAAAAAAAAAIABAAAAAHNpdGUvaW5kZXguaHRtbFBLAQIUAxQAAAAIAPebLV0XyqGqFwAAABUAAAAOAAAAAAAAAAAAAACAAYkAAABzaXRlL3N0eWxlLmNzc1BLAQIUAxQAAAAIAPebLV1SI2NAFgAAABYAAAAaAAAAAAAAAAAAAACAAcwAAABfX01BQ09TWC9zaXRlLy5faW5kZXguaHRtbFBLBQYAAAAAAwADAMEAAAAaAQAAAAA='
 
 /** A .zip of a two-file site, for the picker check far below. */
 const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
@@ -341,6 +352,7 @@ async function run () {
   await checkPublishingByDrop(page)
   await checkPublishingFromThePicker(page)
   await checkSignatureLandsWhereReadersLook()
+  await checkArchiveWithSomethingBesideTheSite()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -362,15 +374,6 @@ async function run () {
   await checkSandboxProbe()
 }
 
-/**
- * Reading a site must not depend on being able to store one.
- *
- * Browsers set to block site data give a failing or hanging IndexedDB, and the
- * gate used to take that personally: `render()` awaited `isKept()`, and an
- * unopenable database turned into "Spore is broken" rather than "offline
- * storage is unavailable". Simulated here by making `indexedDB.open` hang, the
- * worst case, since a promise that never settles is what actually wedged it.
- */
 /**
  * The other two ways in: an ordinary file picker, and a .zip through it.
  *
@@ -754,6 +757,86 @@ async function checkSignatureLandsWhereReadersLook () {
   await page.close()
 }
 
+/**
+ * An archive with something beside the site in it, published signed.
+ *
+ * `__MACOSX/` is not an exotic shape: it is what macOS's own "Compress" puts
+ * next to any folder it compresses. Readers are scoped to the entry page's
+ * directory, signing was not, and the manifest therefore described a file no
+ * verifier could see — which reads as **broken**, not as unsigned. Every signed
+ * publication of an ordinary Mac-made zip accused itself of being tampered with.
+ */
+async function checkArchiveWithSomethingBesideTheSite () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  await pick(page, [{ name: 'site.zip', type: 'application/zip', base64: MAC_STYLE_ZIP }])
+
+  // Either dialog is waited for, not just the expected one: a gate that skipped
+  // the warning should fail the checks below rather than time out here, which
+  // says nothing about what went wrong.
+  await page.waitForFunction(() =>
+    document.getElementById('outside-dialog').open ||
+    document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  const told = await page.evaluate(() => ({
+    asked: document.getElementById('outside-dialog').open,
+    root: document.getElementById('outside-root').textContent,
+    files: document.getElementById('outside-files').textContent
+  }))
+  check('an archive with a second top level says what is not part of the site',
+    told.asked && told.root === 'site/' && told.files.includes('__MACOSX'),
+    JSON.stringify(told))
+
+  if (told.asked) await page.click('#outside-accept')
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.type('#signin-label', 'Mac')
+  await page.type('#signin-passphrase', 'another long enough phrase to sign with')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'mac')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const hash = /btih:([0-9a-f]{40})/.exec(link ?? '')?.[1]
+
+  const paths = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    return (await getClient().get(infoHash)).files.map(file => file.path)
+  }, hash)
+  check('what is not part of the site is not published either',
+    !paths.some(path => path.includes('__MACOSX')), JSON.stringify(paths))
+
+  // The verdict the reader reaches, which is the thing that was wrong. "broken"
+  // is not a milder "unverified": it is the gate saying somebody altered this.
+  await page.waitForFunction(
+    () => !document.getElementById('author').hidden, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => document.getElementById('author').dataset.state !== 'checking', { timeout: 30_000 })
+  const verdict = await page.$eval('#author', el => el.dataset.state)
+  check('and the site it publishes reads as verified, not as tampered with',
+    verdict === 'verified', verdict)
+
+  await page.close()
+}
+
+/**
+ * Reading a site must not depend on being able to store one.
+ *
+ * Browsers set to block site data give a failing or hanging IndexedDB, and the
+ * gate used to take that personally: `render()` awaited `isKept()`, and an
+ * unopenable database turned into "Spore is broken" rather than "offline
+ * storage is unavailable". Simulated here by making `indexedDB.open` hang, the
+ * worst case, since a promise that never settles is what actually wedged it.
+ */
 async function checkSurvivesDeadStorage (page) {
   const wedged = await browser.createBrowserContext()
   const victim = await wedged.newPage()
