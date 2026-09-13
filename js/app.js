@@ -283,8 +283,10 @@ function navigate (ref) {
  * directly; `popstate` is wired so the browser's own back button still works.
  */
 function goHome () {
-  if (!location.hash) return
-  history.pushState(null, '', location.pathname + location.search)
+  // Routed even with no fragment to clear. A publish that is refused shows the
+  // error page without ever setting one, and returning early left its only way
+  // out — a button reading "Publish a site instead" — doing nothing at all.
+  if (location.hash) history.pushState(null, '', location.pathname + location.search)
   route()
 }
 

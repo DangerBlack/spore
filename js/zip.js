@@ -207,14 +207,24 @@ function checkPath (path) {
   return normalized
 }
 
-/** Scan back from the end for the end-of-central-directory record. */
+/**
+ * Scan back from the end for the end-of-central-directory record.
+ *
+ * The signature alone is not enough to identify it: an archive may carry a
+ * trailing comment, and a comment may contain those four bytes. So the record
+ * is accepted only if its own comment-length field accounts for exactly the
+ * bytes that follow it — which a coincidence inside a comment will not do.
+ * Without that, a perfectly good archive was refused as having no files in it.
+ */
 function findEndRecord (bytes, view) {
   if (bytes.length < 22) throw new ZipError('That file is not a zip archive.')
 
   const from = Math.max(0, bytes.length - MAX_TRAILER)
   for (let at = bytes.length - 22; at >= from; at--) {
     const signature = view.getUint32(at, true)
-    if (signature === EOCD) return at
+    if (signature === EOCD && view.getUint16(at + 20, true) === bytes.length - at - 22) {
+      return at
+    }
     if (signature === EOCD64) {
       throw new ZipError('That archive is in zip64 format, which Spore does not read.')
     }
@@ -306,6 +316,8 @@ function megabytes (bytes) {
 
 /** MS-DOS date and time, which is what a zip stores: local, with no zone. */
 function lastModified (entry) {
+  if (entry.date === 0) return {} // no timestamp, rather than December 1979
+
   const at = new Date(
     1980 + ((entry.date >> 9) & 0x7f), ((entry.date >> 5) & 0xf) - 1, entry.date & 0x1f,
     (entry.time >> 11) & 0x1f, (entry.time >> 5) & 0x3f, (entry.time & 0x1f) * 2)
