@@ -194,6 +194,39 @@ export function rootFor (files) {
   return entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : ''
 }
 
+/**
+ * The files that are actually the site, and the ones that merely came with it.
+ *
+ * A set of files can have more than one top level: `site/index.html` beside a
+ * stray `README.md`, or — the common case, because it is what macOS's own
+ * "Compress" produces — `site/` beside `__MACOSX/`. Readers are scoped to the
+ * entry's directory: `readSporePub` looks beside the entry page and
+ * `verifyContent` lists the files under that root. Signing was not scoped at
+ * all, so it hashed the strays too, and the manifest then listed files that a
+ * verifier could not see. The result was not "unverified" but **broken**: every
+ * signed publication of an ordinary Mac-made archive accused itself of having
+ * been tampered with.
+ *
+ * So the site is the entry's subtree, and nothing else travels with it. What is
+ * left out is returned rather than dropped, because the caller has to say so —
+ * removing files from somebody's publication without telling them is the same
+ * repair this codebase refuses everywhere else.
+ *
+ * @param {File[]} files
+ * @returns {{files: File[], outside: File[]}}
+ */
+export function siteFiles (files) {
+  const root = rootFor(files)
+  if (!root) return { files, outside: [] }
+
+  const inside = []
+  const outside = []
+  for (const file of files) {
+    ;((file.fullPath || file.name).startsWith(root) ? inside : outside).push(file)
+  }
+  return { files: inside, outside }
+}
+
 async function collect (entry, out, prefix = '') {
   if (entry.isFile) {
     const file = await new Promise((resolve, reject) => entry.file(resolve, reject))

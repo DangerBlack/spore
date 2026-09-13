@@ -33,7 +33,7 @@
  * which is what keeps this file the size it is.
  */
 
-import { ZIP_MAX_ENTRY_BYTES, ZIP_MAX_TOTAL_BYTES } from './config.js'
+import { ZIP_MAX_ENTRIES, ZIP_MAX_ENTRY_BYTES, ZIP_MAX_TOTAL_BYTES } from './config.js'
 
 const EOCD = 0x06054b50 // end of central directory
 const CENTRAL = 0x02014b50 // one entry in that directory
@@ -127,6 +127,14 @@ function readCentralDirectory (bytes, view) {
     throw new ZipError('That archive is in zip64 format, which Spore does not read.')
   }
   if (at0 + size > bytes.length) throw new ZipError('That archive is truncated.')
+
+  // Bytes are not the only budget. Sixty-five thousand empty entries weigh
+  // nothing and stay under every cap above, while each one becomes a File, a
+  // torrent entry, a manifest line and a row in the file list — a bomb made of
+  // metadata rather than of data.
+  if (count > ZIP_MAX_ENTRIES) {
+    throw new ZipError(`That archive holds more than ${ZIP_MAX_ENTRIES} files.`)
+  }
 
   const entries = []
   const seen = new Set()
@@ -247,9 +255,12 @@ function checkPath (path) {
   // site would fail to verify for a reason nobody could see.
   const parts = path.split('/')
   if (parts.includes('..')) throw new ZipError(`${path} points outside the archive.`)
-  // Every component but the last, which is empty exactly when this is a
-  // directory record and is meant to be.
-  if (parts.slice(0, -1).some(part => part === '' || part === '.')) {
+  // `.` is refused everywhere, including last: `site/.` is not a directory
+  // record, and `new URL()` resolves it to `site/`, so the path the signer
+  // records and the path a reader asks for are different strings. An empty
+  // component is allowed only as the last one, which is what a directory
+  // record's trailing slash is and is meant to be.
+  if (parts.includes('.') || parts.slice(0, -1).some(part => part === '')) {
     throw new ZipError(`${path} is not a plain path.`)
   }
 

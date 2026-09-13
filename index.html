@@ -491,6 +491,34 @@
   </div>
 </dialog>
 
+<!--
+  More than one top level. The common case is not exotic: macOS's own "Compress"
+  puts `__MACOSX/` beside the folder you compressed. Readers are scoped to the
+  entry page's directory, so anything outside it is not part of the site — and
+  signing it anyway produced a manifest listing files a verifier could not see,
+  which reads as tampering rather than as a stray file.
+-->
+<dialog id="outside-dialog">
+  <div class="dialog-head">
+    <h2>Some of this is not part of the site</h2>
+  </div>
+
+  <p>The site is <code id="outside-root"></code> and everything under it.
+     These came in the same archive but sit outside it, so they will
+     <strong>not</strong> be published:</p>
+
+  <ul id="outside-files" class="no-entry-files"></ul>
+
+  <p class="muted small">A reader opens the entry page and checks the files
+     beside it. Anything elsewhere cannot be reached, cannot be checked, and
+     signing it would make the site accuse itself of having been altered.</p>
+
+  <div class="dialog-actions">
+    <button id="outside-cancel" type="button" class="link">Go back</button>
+    <button id="outside-accept" type="button">Publish the site</button>
+  </div>
+</dialog>
+
 <dialog id="diagnostics">
   <div class="dialog-head">
     <h2>Diagnostics</h2>

@@ -13,7 +13,8 @@ import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne }
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
-  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish, rootFor
+  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish, rootFor,
+  siteFiles
 } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
@@ -80,6 +81,11 @@ const ui = {
   noEntryFiles: el('no-entry-files'),
   noEntryAccept: el('no-entry-accept'),
   noEntryCancel: el('no-entry-cancel'),
+  outsideDialog: el('outside-dialog'),
+  outsideRoot: el('outside-root'),
+  outsideFiles: el('outside-files'),
+  outsideAccept: el('outside-accept'),
+  outsideCancel: el('outside-cancel'),
   listing: el('listing'),
   listingName: el('listing-name'),
   listingSummary: el('listing-summary'),
@@ -637,6 +643,77 @@ function askAboutSigning (what) {
 }
 
 /**
+ * Hand the screen back after a publish that did not happen.
+ *
+ * A site that was already open is left where it is: the reader was reading it,
+ * and backing out of publishing something else is not a reason to close it.
+ */
+function backOut () {
+  ui.notice.hidden = true
+  if (!current) showWelcome()
+}
+
+/**
+ * A publish that failed, reported without destroying what is on screen.
+ *
+ * Drops are wired to the whole window, so a corrupt archive can land while
+ * somebody is reading a site. `fail()` clears `current` and replaces the viewer
+ * with an error page, which for a refused archive means the reader loses the
+ * site they were on because of a file they dropped by accident.
+ */
+function failToPublish (error) {
+  if (!current) return fail(error)
+
+  ui.notice.textContent = `That could not be published: ${error.message}`
+  ui.notice.className = 'notice notice--error'
+  ui.notice.hidden = false
+}
+
+/**
+ * Say which files are not part of the site, before any of it is signed.
+ *
+ * @returns {Promise<boolean>} whether to publish the site without them
+ */
+function askAboutFilesOutside (root, outside) {
+  ui.outsideRoot.textContent = root
+  ui.outsideFiles.replaceChildren(...listItems(outside.map(file => file.fullPath || file.name)))
+  ui.outsideDialog.showModal()
+
+  return new Promise(resolve => {
+    const answer = go => { ui.outsideDialog.close(); cleanup(); resolve(go) }
+    const onAccept = () => answer(true)
+    const onCancel = () => answer(false)
+    const onClose = () => { cleanup(); resolve(false) }
+
+    ui.outsideAccept.addEventListener('click', onAccept)
+    ui.outsideCancel.addEventListener('click', onCancel)
+    ui.outsideDialog.addEventListener('close', onClose)
+
+    function cleanup () {
+      ui.outsideAccept.removeEventListener('click', onAccept)
+      ui.outsideCancel.removeEventListener('click', onCancel)
+      ui.outsideDialog.removeEventListener('close', onClose)
+    }
+  })
+}
+
+/** A list of paths, with a tail when there are more than a dialog should show. */
+function listItems (paths, limit = 12) {
+  const items = paths.sort((a, b) => a.localeCompare(b)).slice(0, limit).map(path => {
+    const item = document.createElement('li')
+    item.textContent = path
+    return item
+  })
+  if (paths.length > limit) {
+    const more = document.createElement('li')
+    more.className = 'muted'
+    more.textContent = `and ${paths.length - limit} more`
+    items.push(more)
+  }
+  return items
+}
+
+/**
  * Tell an author their files will open as a list, and let them go back.
  *
  * Deliberately a question and not an error: `chooseEntry` is the same rule the
@@ -646,23 +723,7 @@ function askAboutSigning (what) {
  * @returns {Promise<boolean>} whether to publish it anyway
  */
 function askAboutMissingEntry (files) {
-  const paths = files
-    .map(file => file.fullPath || file.name)
-    .sort((a, b) => a.localeCompare(b))
-    .slice(0, 12)
-
-  ui.noEntryFiles.replaceChildren(...paths.map(path => {
-    const item = document.createElement('li')
-    item.textContent = path
-    return item
-  }))
-  if (files.length > paths.length) {
-    const more = document.createElement('li')
-    more.className = 'muted'
-    more.textContent = `and ${files.length - paths.length} more`
-    ui.noEntryFiles.append(more)
-  }
-
+  ui.noEntryFiles.replaceChildren(...listItems(files.map(file => file.fullPath || file.name)))
   ui.noEntryDialog.showModal()
 
   return new Promise(resolve => {
@@ -1766,7 +1827,7 @@ function wireDropTarget () {
       const { files, name } = await filesFromDrop(event.dataTransfer)
       await seed(files, name)
     } catch (err) {
-      fail(err)
+      failToPublish(err)
     }
   })
 
@@ -1791,7 +1852,7 @@ function wireDropTarget () {
       const { files, name } = await filesFromPicker(picked)
       await seed(files, name)
     } catch (err) {
-      fail(err)
+      failToPublish(err)
     }
   })
 }
@@ -1815,8 +1876,22 @@ async function seed (files, name) {
   // before a magnet exists.
   const entry = entryFor(files)
   if (!entry && !await askAboutMissingEntry(files)) {
-    showWelcome()
+    backOut()
     return
+  }
+
+  // Scoped to the entry's directory, because that is what a reader is scoped
+  // to. An archive with a second top level — `__MACOSX/` beside the folder, for
+  // one — used to have its strays hashed into the signature and then found
+  // missing by every verifier, so an ordinary Mac-made zip published a site
+  // that accused itself of having been altered.
+  const scoped = siteFiles(files)
+  if (scoped.outside.length > 0) {
+    if (!await askAboutFilesOutside(rootFor(files), scoped.outside)) {
+      backOut()
+      return
+    }
+    files = scoped.files
   }
 
   // Asked before anything is hashed, and before `busy()` — which hides the
@@ -1835,8 +1910,7 @@ async function seed (files, name) {
     // leaving it hidden is the same shape as the bug that once made signing in
     // the end of publishing. A site that was already open is left alone: it was
     // not this publish's to close.
-    ui.notice.hidden = true
-    if (!current) showWelcome()
+    backOut()
     return
   }
 
@@ -1873,12 +1947,17 @@ function withSporePub (files, site) {
   if (!identity) return files
 
   const pathOf = file => file.fullPath || file.name
-  if (files.some(file => /(^|\/)spore\.pub$/i.test(pathOf(file)))) return files
 
   // Beside the entry page, which is where readSporePub looks: a key at the root
   // of a torrent does not get to speak for a site in a subdirectory, and a key
   // in a subdirectory does not get to speak for the page readers open.
   const root = rootFor(files)
+
+  // Scoped to that root, and not to the whole set. A `spore.pub` somewhere else
+  // in the archive used to count as "this site already declares a key", so none
+  // was written beside the entry — and the site went out signed by a key no
+  // reader would ever find.
+  if (files.some(file => pathOf(file) === `${root}spore.pub`)) return files
 
   const contents = formatSporePub(identity.hex, publicNameFor(identity.hex), site)
   const file = new File([contents], 'spore.pub', { type: 'text/plain' })
@@ -1909,7 +1988,11 @@ async function signContent (files, site) {
   const described = []
   for (const file of files) {
     const full = pathOf(file)
-    const path = full.startsWith(root) ? full.slice(root.length) : full
+    // Outside the root is outside the site. `verifyContent` lists what is under
+    // the root and nothing else, so a manifest reaching further describes files
+    // the reader cannot see and the site reads as broken rather than unsigned.
+    if (!full.startsWith(root)) continue
+    const path = full.slice(root.length)
     if (path === SIGNATURE_FILE) continue
     described.push({ path, bytes: new Uint8Array(await file.arrayBuffer()) })
   }
