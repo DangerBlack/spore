@@ -136,7 +136,15 @@ Three ways in, because a folder cannot always be chosen:
 Relative links inside, and an `index.html` if you have one — a single page under
 any name works too, and a set of files with no entry page publishes as a
 browsable file list, which Spore says before it seeds anything rather than
-after. The files are hashed in your browser and never sent to a server. You get
+after.
+
+The site is the entry page's folder and everything under it. An archive with a
+second top level — `__MACOSX/` beside your folder, say, which is what macOS
+produces — has that second part named and left out before anything is signed,
+because a reader can only check what sits beside the page they opened. And a
+folder that already declares somebody else's `spore.pub` is published as it is,
+signed by nobody: your signature over their declared key would read to every
+reader as the site having been altered. The files are hashed in your browser and never sent to a server. You get
 a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.

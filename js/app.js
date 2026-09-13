@@ -22,7 +22,9 @@ import {
   restoreRememberedKey, signIn, signOut, useIdentity
 } from './me.js'
 import { signUpdate } from './record.js'
-import { avatar, fingerprint, formatSporePub, normalizeSite, saltFor } from './identity.js'
+import {
+  avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
+} from './identity.js'
 import {
   SIGNATURE_FILE, checkFile, manifestEntries, missingFrom, signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
@@ -59,6 +61,7 @@ const ui = {
   shareNote: el('share-note'),
   shareOpen: el('share-open'),
   shareSuccessor: el('share-successor'),
+  shareUnsigned: el('share-unsigned'),
   shareLink: el('share-link'),
   copy: el('copy'),
   shareDismiss: el('share-dismiss'),
@@ -640,6 +643,41 @@ function askAboutSigning (what) {
       ui.signinDialog.removeEventListener('close', onClose)
     }
   })
+}
+
+/**
+ * The key a set of files already declares for itself, if any.
+ *
+ * @returns {Promise<string|null>} the public key in hex
+ */
+async function keyDeclaredIn (files, root) {
+  const existing = files.find(file => (file.fullPath || file.name) === `${root}spore.pub`)
+  if (!existing) return null
+
+  try {
+    if (existing.size > 4096) return null
+    return parseSporePub(await existing.text())?.hex ?? null
+  } catch {
+    // A `spore.pub` nobody can read declares nothing, which is exactly how the
+    // reader treats it too.
+    return null
+  }
+}
+
+/**
+ * Said beside the share link, where it survives.
+ *
+ * Not in the notice bar: `busy()` overwrites it a moment later and rendering
+ * the site clears it, so the one sentence explaining why nobody was asked for a
+ * passphrase would appear and vanish. That is the same trap `showSuccessorNote`
+ * documents, and this is the same way out of it.
+ */
+function noteForeignKey () {
+  ui.shareUnsigned.textContent =
+    'This folder already declares somebody else’s key, so it went out as it ' +
+    'is: published by you, signed by nobody. Signing it with your key would ' +
+    'have made every reader see it as altered.'
+  ui.shareUnsigned.hidden = false
 }
 
 /**
@@ -1887,12 +1925,20 @@ async function seed (files, name) {
   // that accused itself of having been altered.
   const scoped = siteFiles(files)
   if (scoped.outside.length > 0) {
-    if (!await askAboutFilesOutside(rootFor(files), scoped.outside)) {
+    if (!await askAboutFilesOutside(scoped.root, scoped.outside)) {
       backOut()
       return
     }
     files = scoped.files
   }
+
+  // Signing is refused over somebody else's declaration. `spore.pub` is what a
+  // reader checks the signature against, so writing `spore.sig` with this tab's
+  // key beside a key that is not this tab's produces a mismatch — and the gate
+  // reads a mismatch as **broken**, meaning "altered", not "signed by someone
+  // else". Republishing another person's site is a supported thing to do; it
+  // simply cannot be signed by the person doing it.
+  const declared = await keyDeclaredIn(files, scoped.root)
 
   // Asked before anything is hashed, and before `busy()` — which hides the
   // landing page, and with it the drop zone. A dialog raised over a hidden
@@ -1903,7 +1949,15 @@ async function seed (files, name) {
   // as "unsigned" whatever it contains. Asking the question anyway would take a
   // passphrase, write a real signature, and produce a site that reads as
   // unsigned to everyone — including its author.
-  const decision = entry ? await askAboutSigning(name) : { sign: false, site: null }
+  // Asked as a function, not as a value, because the signing dialog is where an
+  // identity usually arrives: reading `me()` once, before it, answered for a
+  // publisher who was already signed in and left everybody else unprotected —
+  // which is nearly everybody, the first time.
+  const signingOverSomeoneElse = () => Boolean(declared && me() && declared !== me().hex)
+
+  const decision = entry && !signingOverSomeoneElse()
+    ? await askAboutSigning(name)
+    : { sign: false, site: null }
   if (!decision) {
     // Backing out must hand the screen back. The picker path hides the landing
     // page — which is also the drop zone — before this question is asked, and
@@ -1914,18 +1968,24 @@ async function seed (files, name) {
     return
   }
 
+  // Only worth saying when they asked for it: somebody who chose to publish
+  // unsigned does not need to be told their unsigned site is unsigned.
+  const refused = decision.sign && signingOverSomeoneElse()
+  const sign = decision.sign && !refused
+
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {
-    const signed = decision.sign
+    const signed = sign
       ? await signContent(withSporePub(files, decision.site), decision.site)
       : files
     const torrent = await publish(signed, name)
     const magnet = magnetFor(torrent.infoHash, torrent.name)
     showShareLink(magnet)
+    if (refused) noteForeignKey()
 
     // Announced before navigating: navigating replaces the site on screen, and
     // this has to happen whether or not the reader stays to watch it.
-    const successor = decision.sign ? await announceSuccessor(torrent, decision.site) : null
+    const successor = sign ? await announceSuccessor(torrent, decision.site) : null
 
     navigate(magnet)
     if (successor) showSuccessorNote(successor)
@@ -2080,6 +2140,7 @@ function showSuccessorNote ({ site, reaching }) {
  */
 function showShareLink (magnet, justPublished = true) {
   ui.shareSuccessor.hidden = true
+  ui.shareUnsigned.hidden = true
 
   ui.shareIntro.innerHTML = justPublished
     ? '<strong>Published.</strong> Share this link — it works from any Spore mirror.'
