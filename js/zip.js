@@ -38,7 +38,6 @@ import { ZIP_MAX_ENTRY_BYTES, ZIP_MAX_TOTAL_BYTES } from './config.js'
 const EOCD = 0x06054b50 // end of central directory
 const CENTRAL = 0x02014b50 // one entry in that directory
 const LOCAL = 0x04034b50 // the header sitting before each blob
-const EOCD64 = 0x06064b50 // zip64: refused, but worth naming in the message
 
 const STORED = 0
 const DEFLATED = 8
@@ -238,14 +237,17 @@ function checkPath (path) {
 function findEndRecord (bytes, view) {
   if (bytes.length < 22) throw new ZipError('That file is not a zip archive.')
 
+  // Only the real record is looked for. A zip64 shortcut used to sit here,
+  // throwing on any `PK\x06\x06` found while scanning, and it had exactly the
+  // bug the comment-length rule above exists to prevent: those four bytes
+  // inside an ordinary comment refused a perfectly good archive. Zip64 is still
+  // refused — by its markers in the record itself, which cannot be faked by a
+  // coincidence in a comment.
   const from = Math.max(0, bytes.length - MAX_TRAILER)
   for (let at = bytes.length - 22; at >= from; at--) {
-    const signature = view.getUint32(at, true)
-    if (signature === EOCD && view.getUint16(at + 20, true) === bytes.length - at - 22) {
+    if (view.getUint32(at, true) === EOCD &&
+        view.getUint16(at + 20, true) === bytes.length - at - 22) {
       return at
-    }
-    if (signature === EOCD64) {
-      throw new ZipError('That archive is in zip64 format, which Spore does not read.')
     }
   }
   throw new ZipError('That file is not a zip archive, or it is damaged.')

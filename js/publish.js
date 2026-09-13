@@ -175,6 +175,25 @@ export function entryFor (files) {
   return chooseEntry(files.map(file => (file.fullPath || file.name).replace(/\\/g, '/')))
 }
 
+/**
+ * The directory the site's own files sit in, as the reader will see it.
+ *
+ * Derived from the entry page and nowhere else. Signing used to find its own
+ * root with `files.find(...)`, which takes the *first* `index.html` in array
+ * order, while readers open the *shallowest* one. A zip controls that order, so
+ * an archive holding `nested/index.html` before `index.html` put `spore.pub`
+ * and `spore.sig` under `nested/` while readers looked beside the shallow page
+ * — a correctly signed site reading as unsigned, which is the worst way for a
+ * signature to fail, because nothing is wrong except where it was put.
+ *
+ * @param {File[]} files
+ * @returns {string} '' for the top of the torrent, otherwise a trailing slash
+ */
+export function rootFor (files) {
+  const entry = entryFor(files) ?? (files[0].fullPath || files[0].name)
+  return entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : ''
+}
+
 async function collect (entry, out, prefix = '') {
   if (entry.isFile) {
     const file = await new Promise((resolve, reject) => entry.file(resolve, reject))
