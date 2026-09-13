@@ -196,14 +196,24 @@ button:hover, .button:hover { border-color: var(--accent); }
    button sat flush against the paragraph below, which reads as overlapping. */
 .pick {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
   margin: 4px 0 18px;
 }
 
-/* The folder picker is the better path and leads. The file picker is the one
-   that works where no folder picker exists, which is also where the buttons
-   are hardest to hit — hence the stacking below. */
+/* Stacked at every width, and equal, because they never fit side by side: the
+   card is 278px and the two together want 322. Ragged pills under each other
+   read as an accident; a column of equal ones reads as two ways in.
+
+   Block rather than inline, too. Vertical padding on an inline element paints
+   outside its line box without making the line any taller, so two of these
+   overlapped by exactly that padding — invisible with one button, which is how
+   it survived until there were two. */
+.pick .button {
+  display: block;
+  text-align: center;
+}
+
 .button.secondary {
   background: transparent;
   color: var(--muted);
@@ -212,11 +222,9 @@ button:hover, .button:hover { border-color: var(--accent); }
 .button.secondary:hover { color: var(--ink); }
 
 @media (max-width: 560px) {
-  /* Full width and a bigger target: these are the buttons people press on a
-     phone, and they were the smallest thing on the card. */
-  .pick { display: block; }
-  .pick label + label { display: block; margin-top: 8px; }
-  .pick .button { display: block; text-align: center; padding: 12px; }
+  /* A bigger target: these are pressed with a thumb, and the folder one is the
+     one that does not work on the device where that matters most. */
+  .pick .button { padding: 12px; }
 }
 
 .share {

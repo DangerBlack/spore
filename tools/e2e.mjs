@@ -354,6 +354,19 @@ async function checkPublishingFromThePicker (page) {
     await page.$eval('#files-input', input => input.type === 'file' && input.multiple &&
       !input.hasAttribute('webkitdirectory')))
 
+  // Measured at the width this runs at, because the phone check passed while
+  // the desktop layout had the two buttons overlapping by eight pixels: padding
+  // on an inline element paints outside its line box without making the line
+  // taller, which is invisible until there are two of them.
+  const pickers = await page.evaluate(() => [...document.querySelectorAll('.pick .button')]
+    .map(el => {
+      const box = el.getBoundingClientRect()
+      return { top: Math.round(box.top), bottom: Math.round(box.bottom), w: Math.round(box.width) }
+    }))
+  check('the two pickers are a column of equal buttons that do not touch',
+    pickers.length === 2 && pickers[1].top - pickers[0].bottom >= 4 &&
+    pickers[0].w === pickers[1].w, JSON.stringify(pickers))
+
   // --- a .zip, with a folder inside it --------------------------------------
   const before = await page.$eval('#share-link', input => input.value)
   await pick(page, [{ name: 'zipped-site.zip', type: 'application/zip', base64: ZIPPED_SITE }])
