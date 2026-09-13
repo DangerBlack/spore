@@ -81,11 +81,39 @@ async function fromLooseFiles (files) {
 
 /**
  * Seed a set of files.
+ *
+ * The name needs care, because it is not decoration: it is the torrent's only
+ * human-readable label, it travels in every shared link as `dn=`, and for more
+ * than one file it becomes the folder they sit in.
+ *
+ * For a *single* file it becomes the file, extension and all. Naming a
+ * one-page torrent `my-site` renames `index.html` to `my-site`, `findEntry`
+ * then sees no page at all, and the site opens as a one-item file list. That
+ * was already true of a folder containing nothing but an `index.html`, and it
+ * is why nothing is passed here when there is one file: WebTorrent names such a
+ * torrent after the file, which is both correct and what the reader wants.
+ *
  * @returns {Promise<import('webtorrent').Torrent>}
  */
 export async function publish (files, name) {
   checkPublishable(files)
-  return await seedTorrent(files, { name: name ?? undefined })
+  if (files.length === 1) return await seedTorrent(files, {})
+
+  return await seedTorrent(files, { name: name ?? nameFor(files) })
+}
+
+/**
+ * A label for files that arrived without one.
+ *
+ * A picker reports no folder, so loose files have no name to inherit, and
+ * leaving it to WebTorrent names the torrent after whichever file came first —
+ * `post.html/post.html`, which is not wrong so much as embarrassing. The entry
+ * page is the closest thing to a title these files have.
+ */
+function nameFor (files) {
+  const entry = entryFor(files)
+  const from = entry ?? (files[0].fullPath || files[0].name)
+  return from.slice(from.lastIndexOf('/') + 1).replace(/\.html?$/i, '') || 'site'
 }
 
 /**
@@ -107,6 +135,19 @@ export async function publish (files, name) {
  */
 export function checkPublishable (files) {
   if (files.length === 0) throw new Error('There are no files to publish.')
+
+  // Two files at one path is not a layout question, it is a signature question:
+  // `spore.sig` would list the path twice with two different hashes, a verifier
+  // would check the first and the worker could serve the second, and the site
+  // would read as verified while showing bytes nobody checked. A zip is allowed
+  // to contain this and the picker can be talked into it, so it is refused here
+  // — where every way in passes — rather than in any one of them.
+  const seen = new Set()
+  for (const file of files) {
+    const path = (file.fullPath || file.name).replace(/\\/g, '/')
+    if (seen.has(path)) throw new Error(`There are two files called ${path}.`)
+    seen.add(path)
+  }
 }
 
 /**

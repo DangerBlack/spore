@@ -233,8 +233,11 @@ Deferred until wanted: the editor of Option B, in its narrow form only.
    viewer before announcing would show the author the real thing, through the
    real service worker under the real CSP. Whether that is worth the extra hash
    on a phone is the second thing to measure.
-5. **What goes in `dn=` for a set of loose files?** A folder supplies a name
-   and a bare file list does not. Whatever is chosen appears in every shared
-   link, so it should be chosen.
+5. ~~**What goes in `dn=` for a set of loose files?**~~ Answered, and it was
+   sharper than it looked: a `name` passed for a *single* file becomes the file,
+   extension and all, so naming a one-page torrent turns `index.html` into
+   `index` and the site opens as a one-item file list. Nothing is passed for one
+   file; loose files take the entry page's name, since leaving it to WebTorrent
+   produced `post.html/post.html`.
 6. **Is the remaining gap real?** Someone with a phone, no tools, and something
    to say. If that person exists in practice, Option B comes back — narrow.

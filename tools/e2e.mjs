@@ -29,6 +29,12 @@ const CHROME = option('--chrome', process.env.CHROME ?? '/usr/bin/google-chrome'
 const SITE = 'example-site'
 const SITE_FILES = ['index.html', 'about.html', 'probe.js', 'css/site.css', 'css/leaf.svg']
 
+/** A .zip whose trailing comment contains the end-of-directory signature. */
+const COMMENTED_ZIP = 'UEsDBBQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAaW5kZXguaHRtbLPJMLRzzs/NTc0rSU2x0QfyAFBLAQIUAxQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAADoAAAAiAFBLBQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+
+/** A .zip carrying two entries at the same path, with different contents. */
+const DUPLICATE_PATHS = 'UEsDBBQAAAAIABqSLV2DkPvYDgAAAA4AAAAKAAAAaW5kZXguaHRtbLPJMLQrKMrMzbfRB7IAUEsDBBQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAaW5kZXguaHRtbLPJMLQrTk3Oz0vJt9EHsgFQSwECFAMUAAAACAAaki1dg5D72A4AAAAOAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLAQIUAxQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAAAAAAAAAAACAATYAAABpbmRleC5odG1sUEsFBgAAAAACAAIAcAAAAG4AAAAAAA=='
+
 /** A .zip of a two-file site, for the picker check far below. */
 const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
 
@@ -405,9 +411,43 @@ async function checkPublishingFromThePicker (page) {
   check('and it opens as the site, not as a file list',
     await (await siteFrame(page)).evaluate(() => document.querySelector('h1')?.textContent) === 'Un post')
 
-  // --- no entry page at all: a question, not a refusal ----------------------
+  // --- an archive whose comment looks like the end of the archive -----------
   await page.evaluate(() => { location.hash = '' })
   await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const beforeComment = await page.$eval('#share-link', input => input.value)
+  await pick(page, [{ name: 'commented.zip', type: 'application/zip', base64: COMMENTED_ZIP }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.click('#signin-skip')
+  await settled(page, beforeComment)
+  check('a trailing comment containing the end-of-directory signature does not fool the reader',
+    await (await siteFrame(page)).evaluate(() => document.querySelector('h1')?.textContent) === 'Commented')
+
+  // --- two entries at one path ---------------------------------------------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'duplicate.zip', type: 'application/zip', base64: DUPLICATE_PATHS }])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  const refused = await page.$eval('#error-detail', el => el.textContent)
+  // Not a layout complaint: spore.sig would list the path twice with two
+  // hashes, a verifier would check the first and the worker could serve the
+  // second, and the site would read as verified while showing unchecked bytes.
+  check('two files at one path are refused before anything can be signed',
+    refused.includes('two files called index.html'), refused.slice(0, 80))
+  check('and the signing question was never asked',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  // A refused publish leaves the error page up, and clearing an already-empty
+  // fragment fires no hashchange, so the way back is the button that is there
+  // for it. Clicking it is also the only way to know the button works.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('the way back from a refused archive is one click', true)
+
+  // --- no entry page at all: a question, not a refusal ----------------------
 
   await pick(page, [
     { name: 'one.html', type: 'text/html', text: '<h1>one</h1>' },
