@@ -19,8 +19,8 @@ at all, it is a wall:
 > publishing from an iPhone is impossible, and no amount of layout work on the
 > "Choose a folder…" button changes it.
 
-So: some way for a site to arrive that is not a folder. Two were considered,
-and they are not equivalent.
+So: some way for a site to arrive that is not a folder. Three were considered,
+and they are not equivalent — one of them is mostly already built.
 
 ## What is not changing
 
@@ -36,7 +36,53 @@ and hands it over. A second publishing path would be a second place for the
 security model to be subtly wrong, and the security model is the project.
 
     folder  ──►  File[] with fullPath  ──►  seed()  ──►  (unchanged)
+    files   ──►  File[] with fullPath  ──┤
     zip     ──►  File[] with fullPath  ──┘
+
+## Option zero: accept a single page
+
+**Do this first. Most of it already exists.**
+
+Before any container format, there is a case the gate already half-supports and
+refuses for no good reason. `findEntry` in `site.js` says, in as many words,
+that "a torrent of a single page, however it was named, is still a site", and it
+works: given one `.html` file under any name, it renders it. But
+`checkPublishable` in `publish.js` insists on an `index.html`, so the gate
+refuses to publish something it is perfectly happy to read:
+
+    reading   one page, any name   ->  il-mio-post.html   (rendered)
+    publishing one page, any name   ->  refused: "A site needs an index.html"
+
+That asymmetry is the whole bug. Removing it means making the publish rule the
+same rule the read path already uses, and adding one input without
+`webkitdirectory` — which is the plain file picker that *does* work on iOS,
+reaching Files, iCloud Drive and every other document provider.
+
+Nothing is renamed and nothing is rewritten. The page keeps the name its author
+gave it, in the torrent and in the magnet's `dn=`, because the reader already
+knows what to do with it. `spore.pub` and `spore.sig` sit beside it exactly as
+they do beside an `index.html`.
+
+It is also the shape most pages actually arrive in. A self-contained page with
+its CSS in a `<style>` block is what a person writes for a single post, and it
+is what a language model hands back when asked for one.
+
+Selecting several files at once works too, with one limit worth stating plainly:
+a file picker yields no relative paths, so everything lands at the root of the
+torrent. A flat site — `post.html`, `style.css`, `photo.jpg` — publishes
+correctly. A site with `css/style.css` cannot be expressed this way at all, and
+that, precisely, is what the zip is for.
+
+Two details to get right rather than assume:
+
+- **The publish rule must mirror the read rule exactly**, not approximately.
+  "Would `findEntry` find an entry in this?" is the question, and anything else
+  will diverge the first time one of them is touched. If it would not — two
+  pages and no index — refuse before the signing dialog, with a message that
+  says which files were picked and what is missing.
+- **The torrent's name.** A folder gives one; a handful of loose files does not.
+  What appears in `dn=`, and therefore in every shared link, needs deciding
+  rather than inheriting whatever the client picks.
 
 ## Option A: accept a .zip
 
@@ -132,15 +178,20 @@ it ever gets larger than that in the planning, it is the wrong thing.
 
 ## Phases
 
-**Z1 — accept a zip.** The picker takes `.zip` beside the folder input, the
-reader unpacks it in memory, the entries go to `seed()` unchanged. Same signing
-dialog, same `spore.sig`, same sandbox. This alone makes an iPhone sufficient to
-publish, and it is where the effort should go first.
+**S1 — a single page, and flat sets of files.** Make the publish rule the read
+rule, add a picker without `webkitdirectory`. Almost nothing to write, and it
+covers the commonest thing anyone publishes. It is also the smallest possible
+test of whether the iOS wall is really where this document claims it is.
+
+**Z1 — accept a zip.** For everything with a subdirectory in it, which a file
+picker can never express. The reader unpacks in memory and the entries go to
+`seed()` unchanged.
 
 **Z2 — say what the gate will refuse.** A site arriving from elsewhere will
-often contain a `<script>`, a font from Google, an analytics pixel or a hotlinked
-image. Under the CSP these do not fail loudly, they silently never happen, and
-the author finds out from a reader or not at all. Report them, with paths.
+often contain a `<script>`, a font from Google, an analytics pixel or a
+hotlinked image. Under the CSP these do not fail loudly, they silently never
+happen, and the author finds out from a reader or not at all. Report them, with
+paths.
 
 **It must not rewrite anything** — not to inline the font, not to strip the
 script, not to fix a path. The moment the gate edits an author's bytes, what was
@@ -148,9 +199,9 @@ published is no longer what was reviewed, and the signature covers something
 nobody read.
 
 **Z3 — "edit this site".** When reading a site whose key is the key you are
-signed in with, offer to download it back as a zip, so the round trip closes
-with the same tools the author already uses. The update machinery exists and
-already reaches readers.
+signed in with, offer it back as a zip, so the round trip closes with the tools
+the author already uses. The update machinery exists and already reaches
+readers.
 
 Deferred until wanted: the editor of Option B, in its narrow form only.
 
@@ -179,5 +230,8 @@ Deferred until wanted: the editor of Option B, in its narrow form only.
    viewer before announcing would show the author the real thing, through the
    real service worker under the real CSP. Whether that is worth the extra hash
    on a phone is the second thing to measure.
-5. **Is the remaining gap real?** Someone with a phone, no tools, and something
+5. **What goes in `dn=` for a set of loose files?** A folder supplies a name
+   and a bare file list does not. Whatever is chosen appears in every shared
+   link, so it should be chosen.
+6. **Is the remaining gap real?** Someone with a phone, no tools, and something
    to say. If that person exists in practice, Option B comes back — narrow.
