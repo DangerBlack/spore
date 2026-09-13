@@ -12,7 +12,9 @@ import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
-import { checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish } from './publish.js'
+import {
+  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish, rootFor
+} from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
   publicNameFor, publishedSeries, recordPublished, rememberKeyOnDevice,
@@ -1810,8 +1812,9 @@ async function seed (files, name) {
   // Not a refusal. A set of files with no entry page publishes perfectly well
   // and renders as a browsable list, which is occasionally the point — but it
   // is rarely what someone means by "my site", and this is the last moment
-  // before a magnet exists and a signature covers it.
-  if (!entryFor(files) && !await askAboutMissingEntry(files)) {
+  // before a magnet exists.
+  const entry = entryFor(files)
+  if (!entry && !await askAboutMissingEntry(files)) {
     showWelcome()
     return
   }
@@ -1819,7 +1822,13 @@ async function seed (files, name) {
   // Asked before anything is hashed, and before `busy()` — which hides the
   // landing page, and with it the drop zone. A dialog raised over a hidden
   // page would leave nothing to come back to if it were cancelled.
-  const decision = await askAboutSigning(name)
+  // Signing is not offered for a file list, because nothing would ever check
+  // it. A reader's check reads `spore.pub` and `spore.sig` from beside the
+  // entry page, and a listing has no entry page: the gate shows such a torrent
+  // as "unsigned" whatever it contains. Asking the question anyway would take a
+  // passphrase, write a real signature, and produce a site that reads as
+  // unsigned to everyone — including its author.
+  const decision = entry ? await askAboutSigning(name) : { sign: false, site: null }
   if (!decision) {
     // Backing out must hand the screen back. The picker path hides the landing
     // page — which is also the drop zone — before this question is asked, and
@@ -1866,11 +1875,10 @@ function withSporePub (files, site) {
   const pathOf = file => file.fullPath || file.name
   if (files.some(file => /(^|\/)spore\.pub$/i.test(pathOf(file)))) return files
 
-  // Beside the index, which is what readSporePub looks for: a key at the root
-  // of a torrent does not get to speak for a site in a subdirectory.
-  const index = files.find(file => /(^|\/)index\.html?$/i.test(pathOf(file)))
-  const path = pathOf(index ?? files[0])
-  const root = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
+  // Beside the entry page, which is where readSporePub looks: a key at the root
+  // of a torrent does not get to speak for a site in a subdirectory, and a key
+  // in a subdirectory does not get to speak for the page readers open.
+  const root = rootFor(files)
 
   const contents = formatSporePub(identity.hex, publicNameFor(identity.hex), site)
   const file = new File([contents], 'spore.pub', { type: 'text/plain' })
@@ -1896,11 +1904,7 @@ async function signContent (files, site) {
   if (!identity) return files
 
   const pathOf = file => file.fullPath || file.name
-  const index = files.find(file => /(^|\/)index\.html?$/i.test(pathOf(file)))
-  const anchorPath = pathOf(index ?? files[0])
-  const root = anchorPath.includes('/')
-    ? anchorPath.slice(0, anchorPath.lastIndexOf('/') + 1)
-    : ''
+  const root = rootFor(files)
 
   const described = []
   for (const file of files) {

@@ -78,6 +78,13 @@ that, precisely, is what the zip is for.
 
 Two details to get right rather than assume:
 
+- **A file list cannot be signed, and is not offered the chance.** A reader's
+  check reads `spore.pub` and `spore.sig` from beside the entry page, and a
+  listing has no entry page, so the gate shows one as "unsigned" whatever it
+  contains. Asking for a passphrase would take a real key, write a real
+  signature and produce a site that reads as unsigned to everyone including its
+  author. The dialog says so instead. Revisit only by defining what verifying a
+  listing means, which is a change to the verification story rather than to this.
 - **The publish rule must mirror the read rule exactly**, not approximately.
   "Would `findEntry` find an entry in this?" is the question, and anything else
   will diverge the first time one of them is touched. If it would not — two

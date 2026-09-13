@@ -54,6 +54,14 @@ const REFUSED_ARCHIVES = [
   { name: 'NOT_A_ZIP', file: 'not-a-zip.zip', because: 'not a zip archive', base64: 'PGh0bWw+bm90IGFuIGFyY2hpdmUgYXQgYWxsPC9odG1sPg==' }
 ]
 
+/**
+ * A .zip whose central directory lists `nested/index.html` before `index.html`.
+ *
+ * Readers open the shallowest page; signing used to take the first one it found
+ * in array order, which an archive chooses.
+ */
+const ORDERED_ZIP = 'UEsDBBQAAAAIAPCVLV1qlh8DKAAAADMAAAARAAAAbmVzdGVkL2luZGV4Lmh0bWyzUUzJTy6pLEhVyCjJzbGzKcksyUm1y0stLklNsdGH8GwyDOEiQCYAUEsDBBQAAAAIAPCVLV20QKIBKwAAADUAAAAKAAAAaW5kZXguaHRtbLNRTMlPLqksSFXIKMnNsbMpySzJSbUrzkjMyckvt9GHcG0yDO2CYUJANgBQSwECFAMUAAAACADwlS1dapYfAygAAAAzAAAAEQAAAAAAAAAAAAAAgAEAAAAAbmVzdGVkL2luZGV4Lmh0bWxQSwECFAMUAAAACADwlS1dtECiASsAAAA1AAAACgAAAAAAAAAAAAAAgAFXAAAAaW5kZXguaHRtbFBLBQYAAAAAAgACAHcAAACqAAAAAAA='
+
 /** A .zip of a two-file site, for the picker check far below. */
 const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
 
@@ -327,6 +335,7 @@ async function run () {
   await checkKeepingOffline(page, infoHash)
   await checkPublishingByDrop(page)
   await checkPublishingFromThePicker(page)
+  await checkSignatureLandsWhereReadersLook()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -575,9 +584,12 @@ async function checkPublishingFromThePicker (page) {
     () => document.getElementById('no-entry-dialog').open, { timeout: 20_000 })
   await page.click('#no-entry-accept')
 
-  await page.waitForFunction(
-    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
-  await page.click('#signin-skip')
+  // Signing is not offered here, and that is the point: a reader's check reads
+  // the signature from beside the entry page, and there is none, so a signed
+  // file list would read as unsigned to everyone including its author.
+  await wait(1500)
+  check('a file list is not offered a signature nobody could check',
+    await page.$eval('#signin-dialog', d => !d.open))
 
   await page.waitForFunction(
     () => !document.getElementById('listing').hidden, { timeout: 40_000 })
@@ -644,6 +656,73 @@ async function pick (page, files) {
     input.files = data.files
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }, files)
+}
+
+/**
+ * Where a signature is put has to match where a reader looks for it.
+ *
+ * `spore.pub` and `spore.sig` sit beside the entry page, and `readSporePub`
+ * derives that from the page the viewer actually opened — the shallowest
+ * `index.html`. Signing derived its own root separately, from the first
+ * `index.html` in array order, and an archive controls that order. The two
+ * agreed on every folder anyone had tried and disagreed on this one, which
+ * publishes a correctly signed site that reads as unsigned to everybody,
+ * its author included.
+ */
+async function checkSignatureLandsWhereReadersLook () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  await pick(page, [{ name: 'ordered.zip', type: 'application/zip', base64: ORDERED_ZIP }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  await page.type('#signin-label', 'Ordered')
+  await page.type('#signin-passphrase', 'a phrase long enough to be a real one')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'ordered')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const hash = /btih:([0-9a-f]{40})/.exec(link ?? '')?.[1]
+
+  const paths = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    return (await getClient().get(infoHash)).files.map(file => file.path)
+  }, hash)
+
+  const entry = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    const { findEntry } = await import('/js/site.js')
+    return findEntry(await getClient().get(infoHash))
+  }, hash)
+
+  const rootOf = path => path.slice(0, path.lastIndexOf('/') + 1)
+  const signature = paths.find(path => /spore\.pub$/.test(path))
+
+  check('the signature is written beside the page readers actually open',
+    signature && rootOf(signature) === rootOf(entry),
+    JSON.stringify({ entry, signature }))
+
+  // And the reader agrees, which is the thing that was broken: the key was
+  // present in the torrent and invisible to everyone.
+  const named = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    const { findEntry, readSporePub } = await import('/js/site.js')
+    const torrent = await getClient().get(infoHash)
+    return Boolean(await readSporePub(torrent, findEntry(torrent)))
+  }, hash)
+  check('so a reader opening it finds a key rather than "unsigned"', named)
+
+  await page.close()
 }
 
 async function checkSurvivesDeadStorage (page) {
