@@ -56,52 +56,68 @@ how publishing works, the change is wrong.
 
 ## What the author writes
 
-Three options were considered.
+An early draft of this document proposed a structured block editor and argued
+against accepting HTML, on the grounds that turning author text into markup is
+where a missed escape becomes an injection.
 
-**Markdown.** Familiar, and wrong here. A parser is our code, forever, with no
-dependency to lean on — CLAUDE.md says dependencies stay at a minimum, which
-means we would write and maintain it. Worse, a Markdown parser's job is to turn
-text into HTML, which makes it precisely the sort of component where a missed
-escape becomes an injection. Not worth it for emphasis and links.
+That argument is sound and was applied too widely. It holds for a renderer that
+interprets text the author expected to stay text. It does not hold for HTML the
+author wrote deliberately: someone writing their own page already has full
+authority over it, so there is nothing to inject into. And the reader is not
+protected by us sanitising the author — the reader is protected by the sandbox,
+the CSP and `script-src 'none'`, which are exactly the same for pasted HTML as
+for the HTML inside a dropped folder. The threat model does not change.
 
-**A rich-text editor over `contenteditable`.** Largest surface, most
-browser-specific bugs, worst behaviour on phones. No.
+So there are two modes, and the plain one comes first.
 
-**A structured document.** Proposed. The page is an ordered list of blocks:
+### HTML mode
 
-    { title, blocks: [ {type: 'text', text}, {type: 'heading', text},
-                       {type: 'quote', text}, {type: 'image', src, alt},
-                       {type: 'code', text}, {type: 'rule'} ] }
+A textarea holding the literal bytes of `index.html`. What is typed is what is
+in the torrent, byte for byte. No parser, no renderer, no transformation — the
+smallest possible amount of our code between an author and the swarm:
 
-Rendering is a loop with escaping, not a parser. The author's text is escaped
-first and interpreted second, so there is no input that becomes markup by
-accident. Inside a paragraph a deliberately tiny inline set is applied *to the
-already-escaped text* — `*bold*`, `_italic_`, `[label](relative-or-absolute
-url)` — which is roughly forty lines and cannot inject by construction, because
-by the time those rules run there are no live angle brackets left to produce.
+    new File([textarea.value], 'index.html')  ──►  seed()
 
-Links get the same treatment every other site gets: external ones are blocked by
-the CSP at read time, whether the author understood that or not. The editor
-should say so when one is typed, rather than let it fail silently in the reader's
-browser.
+This is the mode that answers the obvious question: *what if I want to write
+HTML, or have something else write it for me?* A page generated elsewhere —
+by hand, by a static site generator, by a language model — is pasted in and
+published. On a phone, where there is no folder to drop, pasting is the only
+way that content arrives at all, and it would be strange to accept every folder
+on a laptop and refuse the same bytes on a phone.
 
-## Preview must not be a second renderer
+More than one file, when needed: each is a name and a body, so `style.css`
+beside `index.html` costs nothing new. Binary files come from the image picker
+below, not from a textarea.
 
-The temptation is `srcdoc`, or a blob URL, or just injecting into a div. Each
-would produce a preview governed by different rules than the published page:
-different origin, different CSP, different service worker. An author would tune a
-page against a preview that lies, and find out from a reader.
+### Prose mode
 
-**Proposal: the preview is the real thing.** Previewing seeds the files into a
-local torrent and opens it in the ordinary viewer, through the service worker,
-in the sandboxed iframe, under the gate's CSP. What the author sees is what the
-next person gets, including the parts that break. "Publish" then only announces
-what already exists.
+For writing rather than pasting: a title and an ordered list of blocks
+(paragraph, heading, quote, image, code, rule), rendered by a loop with
+escaping. Author text is escaped first and interpreted second, so there is no
+input that becomes markup by accident, and a deliberately tiny inline set —
+`*bold*`, `_italic_`, `[label](url)` — is applied to the already-escaped text,
+where it cannot inject because there are no live angle brackets left to produce.
 
-Cost, honestly: hashing a torrent per preview, so it is an explicit button and
-not a live pane, and a stack of throwaway torrents to destroy. Whether that cost
-is acceptable on a phone is an open question below, and the first thing to
-measure.
+This is a convenience for writing a post with a thumb. It is *not* a
+prerequisite for publishing from a phone, which is why it moved to the last
+phase: HTML mode alone removes the wall.
+
+## Telling the author what will break, without touching their bytes
+
+A page arriving from outside will often contain things this gate refuses: a
+`<script>`, a font from Google, an analytics pixel, an image hotlinked from
+another site. Under the CSP those do not fail loudly, they simply never happen,
+and the author finds out from a reader — or does not find out at all.
+
+The editor should read the HTML and say so: *three requests to other sites will
+be blocked; one script will not run; these will not fail with an error, they
+will silently do nothing.* Listed, with line numbers where possible.
+
+**It must not rewrite anything.** Not to inline the font, not to strip the
+script, not to helpfully fix a path. The author's bytes are the author's bytes;
+the moment the editor edits them on the author's behalf, what was published is
+no longer what was reviewed, and the signature covers something nobody read.
+Warn, and publish exactly what was typed.
 
 ## Images
 
@@ -124,35 +140,43 @@ come back tomorrow" and nothing else.
 
 The harder case is the one that makes this worth building: you published from a
 laptop, you are on a train with a phone, and you want to fix a sentence. The
-draft is on the laptop. Parsing the published HTML back into blocks would be
-lossy and fragile.
+draft is on the laptop.
 
-**Proposal: the source travels with the site.** The document JSON ships in the
-torrent as one more file. It is covered by `spore.sig` like everything else, it
-is a fraction of the size of the HTML it generates, and it means anyone holding
-the key can open the site in the editor from any device, change a line, and
-republish as a signed successor. It also makes the page honestly
-view-source-able, which suits the rest of the project.
+In HTML mode this problem does not exist. The source *is* `index.html`, it is
+already in the torrent, and "edit this page" means reading it back out into the
+textarea. Nothing extra to ship, nothing to keep in sync, and the round trip is
+exact.
 
-The cost is that the site carries roughly its own text twice. For a page of
-prose that is nothing. For a site with large embedded content it might not be,
-so it should be omissible.
+It exists only in prose mode, where the blocks are not recoverable from the
+generated HTML. There the document JSON would have to travel in the torrent as
+one more file, covered by `spore.sig` like everything else — which is a real
+cost (the site carries its own text twice) attached to a mode that is a
+convenience. Another reason for prose mode to come last: it is the only part
+that asks the format to grow.
 
 ## Phases
 
-**E1 — one page, text only.** Title and text blocks, drafts, preview, publish
-through the existing path. This is the whole idea, testable end to end. If it is
-not useful at this size, the later phases will not rescue it.
+**E1 — HTML mode.** A textarea, a filename, preview, publish through the
+existing path. Almost no code of our own: the value of this phase is entirely in
+what it removes, which is the requirement to have a folder on a disk. It alone
+makes an iPhone sufficient to publish, and it alone covers the page written
+somewhere else and pasted in. If only one phase is ever built, this is the one.
 
-**E2 — images.** The picker, the downscale offer, the weight indicator. This is
-what turns it from a note into a page worth sharing, and it is the phase that
-only exists because iOS allows a file picker even where it forbids a folder one.
+**E2 — images, and the lint.** The file picker (`accept="image/*"` works on
+iOS, camera roll and camera), the downscale offer, the page weight, and the
+report of what the CSP will refuse. This is what turns a pasted page into one
+that actually renders the way its author expected.
 
 **E3 — "edit this page".** When you are reading a site whose key is the key you
-are signed in with, offer to edit it: read the source file back out of the
-torrent, open it, republish as a signed successor. The update machinery already
-exists and already reaches readers. This is the phase that makes a phone a
-sufficient tool for running a site, with nothing else involved.
+are signed in with, offer to edit it: read `index.html` back out of the torrent,
+open it, republish as a signed successor. The update machinery already exists
+and already reaches readers. This is the phase that makes a phone a sufficient
+tool for running a site, with nothing else involved.
+
+**E4 — prose mode.** Writing rather than pasting. Genuinely optional, and worth
+building only if someone wants to write a post on a phone rather than publish
+one. Everything it needs that HTML mode does not — a renderer, a block format, a
+source file in the torrent — is a reason to defer it until that want is real.
 
 Multi-page sites, navigation, drafts synced between devices: out of scope, and
 should stay out until someone has actually wanted one.
@@ -165,8 +189,13 @@ Worth writing down while it is still cheap to abandon.
   editor half and a folder half, and they drift. Mitigated only by the one
   architectural commitment above, which is why it is stated as a commitment and
   not a preference.
-- **The renderer grows.** Tables, then footnotes, then embeds. The block list
-  above should be treated as closed, and reopening it should require an argument.
+- **The editor starts improving the author's HTML.** Inlining a font, stripping
+  a script, fixing a path: each is helpful once and corrosive as a rule, because
+  what was published stops being what was reviewed and the signature ends up
+  covering bytes nobody read. Warn, never rewrite.
+- **Prose mode's renderer grows.** Tables, then footnotes, then embeds. The
+  block list should be treated as closed, and reopening it should require an
+  argument — which is the cheapest reason to not build E4 until it is wanted.
 - **It is the third pillar.** CLAUDE.md says the MVP does two things and that
   anything else is Phase 2+ and must not be built "even if it is easy". This is
   a deliberate exception, justified on the grounds that goal 2 ("publish a site
@@ -183,12 +212,15 @@ Worth writing down while it is still cheap to abandon.
    photos takes ten seconds on an older device, the preview story needs
    rethinking — and the alternatives all involve a second renderer, which is the
    thing this design refuses. Measure before committing.
-3. **Does the source file belong in the torrent by default, or on request?**
-   Default makes E3 work everywhere and costs a little size; on-request is
-   smaller and leaves authors stranded on the wrong device.
-4. **What is the source file called, and does a reader need to be told what it
-   is?** It will appear in the file listing beside `spore.pub` and `spore.sig`.
-5. **Does an unsigned editor page make sense?** Signing is optional for folders.
-   An editor page is by definition written by the person at the keyboard, so
-   defaulting to signed may be right — but it would be the first place Spore
+3. **Does an unsigned editor page make sense?** Signing is optional for folders.
+   A page written here is by definition written by the person at the keyboard,
+   so defaulting to signed may be right — but it would be the first place Spore
    nudges rather than asks.
+4. **Does HTML mode need a starting template?** An empty textarea on a phone is
+   a poor invitation, and a filled one is an opinion about what a page should
+   look like. A skeleton with a title and one paragraph is probably the least
+   opinionated useful thing.
+5. **How much of a page can a textarea hold before it becomes unusable on a
+   phone?** A generated page can be tens of kilobytes. Pasting it is fine;
+   scrolling through it to change one line may not be, and that is E3's real
+   usability question rather than E1's.
