@@ -874,6 +874,57 @@ async function checkRepublishing () {
   check('and two folders at once agree with what the reader will see: a list',
     rules.twoFolders.entry === null, JSON.stringify(rules.twoFolders))
 
+  // --- a folder that was nothing but leftovers --------------------------------
+  // checkPublishable runs before the junk is dropped, so a folder holding only
+  // a .DS_Store used to pass it, reach an empty "there is no page" dialog, and
+  // fail at "Hashing 0 files…" — the late failure the early check exists to
+  // prevent.
+  await page.click('#error-home').catch(() => {})
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: '.DS_Store', type: 'application/octet-stream', text: 'Bud1' }])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  const onlyJunk = await page.$eval('#error-detail', el => el.textContent)
+  check('a folder that held nothing but leftovers says so at once',
+    onlyJunk.includes('.DS_Store') && onlyJunk.includes('nothing else here'),
+    onlyJunk.slice(0, 80))
+  check('and it never reached the signing question',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  // --- two publications at once -----------------------------------------------
+  // Drops are wired to the window and an open dialog does not make it inert, so
+  // a folder dropped onto the signing question started a second publish, called
+  // showModal on an already-open dialog, threw, and left the first waiting on a
+  // promise that could never settle.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'first.html', type: 'text/html', text: '<h1>first</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(new File(['<h1>second</h1>'], 'index.html', { type: 'text/html' }))
+    document.body.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }))
+  })
+  await wait(800)
+
+  const both = await page.evaluate(() => ({
+    stillAsking: document.getElementById('signin-dialog').open,
+    told: document.getElementById('notice').hidden ? '' : document.getElementById('notice').textContent
+  }))
+  check('a second publication started over the first is refused, not tangled with it',
+    both.stillAsking && both.told.includes('already on its way'), JSON.stringify(both).slice(0, 90))
+
+  await page.click('#signin-dismiss')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('and the first one can still be answered afterwards',
+    await page.$eval('#signin-dialog', d => !d.open))
+
   // --- the size a signature may be, agreed on both sides ---------------------
   // The reader refuses a spore.sig too large to be one, because it is reading a
   // stranger's torrent. The publisher has to refuse to make one, or an honest
@@ -1189,6 +1240,7 @@ async function checkAnArchiveTooBigToHold () {
     const archive = new File([...parts, ...central, new Uint8Array(end.buffer)],
       'film.zip', { type: 'application/zip' })
 
+    window.__film = archive
     const { filesFromZip } = await import('/js/zip.js')
     const unpacked = await filesFromZip(archive)
     return {
@@ -1202,6 +1254,44 @@ async function checkAnArchiveTooBigToHold () {
     built.archive > 70_000_000, `${Math.round(built.archive / 1e6)} MB`)
   check('and the stored file comes out whole',
     movie && movie.size === 70 * 1024 * 1024, JSON.stringify(built.files))
+
+  // And it can be signed, which is the half that was still false: signing read
+  // every file into memory at once to hash it, so a site with a film in it died
+  // during "Hashing 2 files…" — defeating the very ceiling this branch removed.
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(window.__film)
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 60_000 })
+  await page.type('#signin-label', 'Film')
+  await page.type('#signin-passphrase', 'a passphrase for something with a film in it')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 60_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 60_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'film')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const seeded = await page.evaluate(async magnet => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(magnet)[1])
+    return torrent.files.map(f => ({ path: f.path, length: f.length }))
+  }, link)
+
+  check('a site with a film in it can be signed without the tab dying',
+    seeded.some(f => f.path.endsWith('.mp4') && f.length === 70 * 1024 * 1024),
+    JSON.stringify(seeded.map(f => `${f.path} ${Math.round(f.length / 1e6)}MB`)))
+  check('and the signature covers it',
+    seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
 
   await page.close()
 }

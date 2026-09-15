@@ -1851,6 +1851,35 @@ async function seed (files, name) {
     return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
   }
 
+  // One at a time. Drops are wired to the whole window and an open `<dialog>`
+  // does not make it inert, so a folder dropped on top of the signing question
+  // started a second publish — which called `showModal()` on a dialog that was
+  // already open, threw, and left the first publish waiting on a promise that
+  // could never settle. Both publishes also shared the dialog's buttons, so the
+  // answers could cross.
+  if (publishing) {
+    // The notice bar, not the error page: there is a dialog open, and replacing
+    // the page underneath it would be answering a transient collision by
+    // destroying what the person is in the middle of.
+    ui.notice.textContent =
+      'One publication is already on its way. Finish or cancel that one first.'
+    ui.notice.className = 'notice notice--error'
+    ui.notice.hidden = false
+    return
+  }
+  publishing = true
+  try {
+    await publishOne(files, name)
+  } finally {
+    publishing = false
+  }
+}
+
+/** Whether a publication is between its first question and its magnet. */
+let publishing = false
+
+async function publishOne (files, name) {
+
   try {
     checkPublishable(files)
   } catch (err) {
@@ -1862,6 +1891,17 @@ async function seed (files, name) {
   // the files being seeded are the same files.
   const cleaned = dropJunk(files)
   files = cleaned.files
+
+  // Asked again, because the set just changed. A folder holding nothing but a
+  // .DS_Store passed the check above and arrived at "Hashing 0 files…" with an
+  // empty dialog on the way, which is the late failure the early check exists
+  // to prevent.
+  if (files.length === 0) {
+    return failToPublish(new Error(
+      `There is nothing to publish: ${cleaned.dropped.join(', ')} ` +
+      `${cleaned.dropped.length === 1 ? 'is a file' : 'are files'} an operating ` +
+      'system writes into a folder, and there is nothing else here.'))
+  }
 
   // One page picked on a phone becomes the site, because that is what the
   // person meant.
@@ -1885,7 +1925,7 @@ async function seed (files, name) {
   // untouched and stays its author's, which is what a mirror is — or its key
   // and signature are thrown away and the publisher signs their own. Anything
   // in between produces a site that accuses itself of having been altered.
-  const mirror = entry ? await verifiesAsItStands(files, entry) : false
+  const mirror = entry ? await verifiesAsItStands(files) : false
   const hadKey = !mirror && files.some(file => pathOf(file) === `${siteRoot(files)}spore.pub`)
   if (!mirror) files = stripSignature(files)
 
@@ -1942,7 +1982,7 @@ async function seed (files, name) {
  * with two pieces of code; this is the same question, and there is one answer
  * because there is one implementation.
  */
-async function verifiesAsItStands (files, entry) {
+async function verifiesAsItStands (files) {
   const root = siteRoot(files)
   const at = path => files.find(file => pathOf(file) === `${root}${path}`)
 
@@ -1957,32 +1997,42 @@ async function verifiesAsItStands (files, entry) {
   // defect this branch exists to remove.
   if (pub.size > MAX_KEY_BYTES || sig.size > MAX_MANIFEST_BYTES) return false
 
+  let manifest
   try {
     const key = parseSporePub(await pub.text())
     const result = await verifyManifest(await sig.text(), key.hex)
     if (!result.ok) return false
-
-    const present = files
-      .map(file => pathOf(file))
-      .filter(path => path.startsWith(root))
-      .map(path => path.slice(root.length))
-
-    if (missingFrom(result.manifest, present).length > 0) return false
-    if (unlistedIn(result.manifest, present).length > 0) return false
-
-    for (const file of files) {
-      const path = pathOf(file)
-      if (!path.startsWith(root)) continue
-
-      const relative = path.slice(root.length)
-      if (relative === SIGNATURE_FILE) continue
-      if (!(await checkFile(result.manifest, relative,
-        new Uint8Array(await file.arrayBuffer()))).ok) return false
-    }
-    return true
+    manifest = result.manifest
   } catch {
+    // Unreadable or malformed: this publication declares nothing usable, which
+    // is exactly how a reader treats it.
     return false
   }
+
+  const present = files
+    .map(file => pathOf(file))
+    .filter(path => path.startsWith(root))
+    .map(path => path.slice(root.length))
+
+  if (missingFrom(manifest, present).length > 0) return false
+  if (unlistedIn(manifest, present).length > 0) return false
+
+  // Deliberately outside the `try`. A file that cannot be *read* is not a
+  // signature that failed, and swallowing it here threw away a real author's
+  // key and told the publisher their site "arrived without a signature that
+  // stands up" — which would be a lie about somebody else's work. Let it
+  // propagate: a publish that cannot read its own files is not going to
+  // succeed a moment later either.
+  for (const file of files) {
+    const path = pathOf(file)
+    if (!path.startsWith(root)) continue
+
+    const relative = path.slice(root.length)
+    if (relative === SIGNATURE_FILE) continue
+    if (!(await checkFile(manifest, relative,
+      new Uint8Array(await file.arrayBuffer()))).ok) return false
+  }
+  return true
 }
 
 /**
@@ -2093,7 +2143,11 @@ async function signContent (files, site) {
     if (!full.startsWith(root)) continue
     const path = full.slice(root.length)
     if (path === SIGNATURE_FILE) continue
-    described.push({ path, bytes: new Uint8Array(await file.arrayBuffer()) })
+    // The File, not its bytes. `manifestEntries` reads one at a time and lets
+    // each go; reading them here held the whole site at once, which a site
+    // containing a film cannot survive — and which is precisely the ceiling
+    // this branch removed from the archive reader.
+    described.push({ path, bytes: file })
   }
 
   const contents = await signManifest(identity.privateKey, {
