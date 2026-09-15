@@ -1306,6 +1306,25 @@ async function checkAnArchiveTooBigToHold () {
   check('and the signature covers it',
     seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
 
+  // The other side of that limit: a reader must not call a site altered because
+  // one of its files is larger than this browser can hold. The publisher
+  // refuses to sign above MAX_HASHABLE_BYTES; the reader used to try anyway,
+  // fail the allocation, and report "broken" — accusing an author of tampering
+  // over a limit that is ours.
+  const verdicts = await page.evaluate(async () => {
+    const { MAX_HASHABLE_BYTES } = await import('/js/manifest.js')
+    const source = await (await fetch('/js/app.js')).text()
+    const from = source.indexOf('async function verifyContent')
+    const body = source.slice(from, from + source.slice(from).indexOf('\n}\n'))
+    return {
+      cap: MAX_HASHABLE_BYTES,
+      guarded: body.includes('MAX_HASHABLE_BYTES'),
+      accuses: /status: 'broken', reason: `\$\{relative\} could not be read/.test(body)
+    }
+  })
+  check('a file too large for this browser is unverifiable, not tampered with',
+    verdicts.guarded && !verdicts.accuses, JSON.stringify(verdicts))
+
   await page.close()
 }
 
