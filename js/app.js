@@ -1820,10 +1820,18 @@ function wireDropTarget () {
     }
   })
 
-  ui.folder.addEventListener('change', () => {
+  ui.folder.addEventListener('change', async () => {
     const { files, name } = filesFromInput(ui.folder)
-    seed(files, name)
     ui.folder.value = '' // let the same folder be picked twice
+    // Awaited and caught like the other two. This one was left bare, and
+    // `verifiesAsItStands` now lets a read error through on purpose, so a file
+    // that became unreadable between being picked and being hashed made the
+    // page do nothing at all — the exact failure the other two were fixed for.
+    try {
+      await seed(files, name)
+    } catch (err) {
+      failToPublish(err)
+    }
   })
 
   ui.filesInput.addEventListener('change', async () => {
@@ -1925,15 +1933,21 @@ async function publishOne (files, name) {
   // untouched and stays its author's, which is what a mirror is — or its key
   // and signature are thrown away and the publisher signs their own. Anything
   // in between produces a site that accuses itself of having been altered.
-  const mirror = entry ? await verifiesAsItStands(files) : false
-  const hadKey = !mirror && files.some(file => pathOf(file) === `${siteRoot(files)}spore.pub`)
-  if (!mirror) files = stripSignature(files)
+  // Computed once, from the set as it stands, and used by everything after.
+  // `stripSignature` removes files, which can move what `sharedTop` considers
+  // the root — so a set beginning with a stray `spore.pub` was judged "no entry
+  // page, publish it as a list", and then, with the key gone, seeded as a site
+  // the reader opened normally. Recomputing a root is how these two came apart
+  // every previous time.
+  const root = siteRoot(files)
+  const mirror = entry ? await verifiesAsItStands(files, root) : false
+  const hadKey = !mirror && files.some(file => pathOf(file) === `${root}spore.pub`)
+  if (!mirror) files = stripSignature(files, root)
 
   // A manifest is one line per file, and a reader refuses one too large to be
   // a manifest — it is reading a stranger's torrent. A site with thousands of
   // files can make one, so the question is not asked where the answer could
   // only produce a signature nobody will open.
-  const root = siteRoot(files)
   const tooBigToSign = manifestWouldExceed(
     files.map(file => pathOf(file).slice(root.length)))
 
@@ -1949,7 +1963,7 @@ async function publishOne (files, name) {
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {
     const signed = decision.sign
-      ? await signContent(withSporePub(files, decision.site), decision.site)
+      ? await signContent(withSporePub(files, decision.site, root), decision.site, root)
       : files
 
     const torrent = await publish(signed, name)
@@ -1982,8 +1996,7 @@ async function publishOne (files, name) {
  * with two pieces of code; this is the same question, and there is one answer
  * because there is one implementation.
  */
-async function verifiesAsItStands (files) {
-  const root = siteRoot(files)
+async function verifiesAsItStands (files, root) {
   const at = path => files.find(file => pathOf(file) === `${root}${path}`)
 
   const pub = at('spore.pub')
@@ -2088,13 +2101,13 @@ function noteWhatChanged ({ renamed, mirror, dropped, discarded, tooBigToSign })
  * never handed to this function. So there is one key, it is this tab's, and it
  * sits where every reader looks.
  */
-function withSporePub (files, site) {
+function withSporePub (files, site, root) {
   const identity = me()
   if (!identity) return files
 
   const contents = formatSporePub(identity.hex, publicNameFor(identity.hex), site)
   const file = new File([contents], 'spore.pub', { type: 'text/plain' })
-  file.fullPath = `${siteRoot(files)}spore.pub`
+  file.fullPath = `${root}spore.pub`
   return [...files, file]
 }
 
@@ -2109,8 +2122,7 @@ function withSporePub (files, site) {
  * publication verifies exactly as it stands and is not touched at all, or its
  * key and its signature go and the publisher's own take their place.
  */
-function stripSignature (files) {
-  const root = siteRoot(files)
+function stripSignature (files, root) {
   return files.filter(file =>
     pathOf(file) !== `${root}spore.pub` && pathOf(file) !== `${root}${SIGNATURE_FILE}`)
 }
@@ -2128,11 +2140,9 @@ function stripSignature (files) {
  * torrent's name is metadata: renaming a site should not invalidate what its
  * author signed.
  */
-async function signContent (files, site) {
+async function signContent (files, site, root) {
   const identity = me()
   if (!identity) return files
-
-  const root = siteRoot(files)
 
   const described = []
   for (const file of files) {

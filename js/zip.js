@@ -131,6 +131,15 @@ async function readCentralDirectory (blob) {
   }
   if (at0 + size > blob.size) throw new ZipError('That archive is truncated.')
 
+  // `size` and `count` are independent fields, so an archive can declare one
+  // entry and a three-gigabyte index — and the slice below would allocate it
+  // before a single record was parsed. Every other allocation in this file is
+  // bounded; this one was bounded only by the file itself. A record is 46 bytes
+  // plus three 16-bit lengths, so this is the largest an honest index can be.
+  if (size > count * (46 + 3 * 0xffff)) {
+    throw new ZipError('That archive’s index is larger than its contents allow.')
+  }
+
   // Bytes are not the only budget. Sixty-five thousand empty entries weigh
   // nothing and stay under every cap above, while each one becomes a File, a
   // torrent entry, a manifest line and a row in the file list — a bomb made of
