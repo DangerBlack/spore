@@ -99,7 +99,12 @@ Two details to get right rather than assume:
   reader checks a signature against, so writing `spore.sig` with one key beside
   a `spore.pub` naming another produces a mismatch — and a mismatch reads as
   *broken*, not as "signed by someone else". Republishing another person's site
-  is supported; signing it is not, and the publisher is told why. The guard has
+  is supported; re-signing it is not, and the publisher is told why. Note what
+  that leaves standing: a folder carrying its author's own `spore.sig` is
+  republished untouched and stays verified under *their* key, which is exactly
+  what a mirror should be. A declaration nobody can parse counts as a
+  declaration for this purpose, since a reader cannot tell it apart from one
+  that simply is not ours. The guard has
   to be evaluated *after* the signing dialog as well as before it, because that
   dialog is where an identity usually arrives: a check that only looked first
   protected the already-signed-in and nobody else.
