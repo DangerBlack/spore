@@ -57,7 +57,6 @@ const REFUSED_ARCHIVES = [
   { name: 'LEGACY_NAME', file: 'legacy-name.zip', because: 'legacy character set', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjDqS5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMOpLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
   { name: 'C1_CONTROL', file: 'c1-control.zip', because: 'control characters', base64: 'UEsDBBQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjCny5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMKfLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
   { name: 'TRUNCATED_INDEX', file: 'truncated-index.zip', because: 'index is truncated', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAA9AEAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
-  { name: 'TOO_MANY', file: 'too-many.zip', because: 'more than 2000 files', base64: 'UEsDBBQAAAAIAAWcLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAAFnC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAQJxAnDgAAAAyAAAAAAA=' },
   { name: 'TRAILING_DOT', file: 'trailing-dot.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAPebLV2DFtyMAwAAAAEAAAAGAAAAc2l0ZS8uqwAAUEsBAhQDFAAAAAgA95stXYMW3IwDAAAAAQAAAAYAAAAAAAAAAAAAAIABAAAAAHNpdGUvLlBLBQYAAAAAAQABADQAAAAnAAAAAAA=' },
   { name: 'ZIP64', file: 'zip64.zip', because: 'zip64 format', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAD/////AAA=' },
   { name: 'DRIVE_LETTER', file: 'drive-letter.zip', because: 'names a drive', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAANAAAAQzovaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAADQAAAAAAAAAAAAAAgAEAAAAAQzovaW5kZXguaHRtbFBLBQYAAAAAAQABADsAAAA1AAAAAAA=' },
@@ -362,6 +361,7 @@ async function run () {
   await checkEveryShapeAgrees()
   await checkJunkRulesMatchTheLibrary()
   await checkShapesNobodyChose()
+  await checkAnArchiveWithTooManyFiles()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
@@ -1484,6 +1484,91 @@ async function checkShapesNobodyChose () {
   check('publisher and reader agree on a hundred and twenty shapes nobody chose',
     disagreed.length === 0,
     disagreed.length ? `seed ${seed}: ${disagreed[0]}` : `seed ${seed}`)
+}
+
+/**
+ * A real archive with more files in it than the reader will take.
+ *
+ * Built here rather than shipped, because a forged count is a different thing:
+ * an end record claiming forty thousand entries that holds one is simply a
+ * damaged archive, and refusing it as damaged is correct. What has to be
+ * refused *by name* is an archive that really does carry more files than a
+ * browser should turn into that many Files, torrent entries, manifest lines and
+ * rows in a list.
+ */
+async function checkAnArchiveWithTooManyFiles () {
+  const { filesFromZip, ZipError } =
+    await import(`file://${process.cwd()}/js/zip.js`)
+  const { ZIP_MAX_ENTRIES } = await import(`file://${process.cwd()}/js/config.js`)
+
+  const archive = storedZip([...Array(ZIP_MAX_ENTRIES + 500)]
+    .map((_, i) => [`f${i}.txt`, new TextEncoder().encode('x')]))
+
+  let refused = null
+  try {
+    await filesFromZip(new File([archive], 'many.zip', { type: 'application/zip' }))
+  } catch (err) {
+    refused = err
+  }
+  check('an archive really holding more files than the reader takes is refused by name',
+    refused instanceof ZipError && refused.message.includes(`more than ${ZIP_MAX_ENTRIES}`),
+    refused?.message?.slice(0, 70) ?? 'it was accepted')
+}
+
+/** A zip with every entry stored, which is all these checks need. */
+function storedZip (entries) {
+  const table = new Uint32Array(256)
+  for (let i = 0; i < 256; i++) {
+    let c = i
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    table[i] = c >>> 0
+  }
+  const crc32 = bytes => {
+    let crc = 0xffffffff
+    for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+    return (crc ^ 0xffffffff) >>> 0
+  }
+
+  const parts = []
+  const central = []
+  let offset = 0
+
+  for (const [name, bytes] of entries) {
+    const nameBytes = new TextEncoder().encode(name)
+    const crc = crc32(bytes)
+
+    const local = new DataView(new ArrayBuffer(30))
+    local.setUint32(0, 0x04034b50, true)
+    local.setUint16(4, 20, true)
+    local.setUint32(14, crc, true)
+    local.setUint32(18, bytes.length, true)
+    local.setUint32(22, bytes.length, true)
+    local.setUint16(26, nameBytes.length, true)
+
+    const record = new DataView(new ArrayBuffer(46))
+    record.setUint32(0, 0x02014b50, true)
+    record.setUint16(4, 20, true)
+    record.setUint16(6, 20, true)
+    record.setUint32(16, crc, true)
+    record.setUint32(20, bytes.length, true)
+    record.setUint32(24, bytes.length, true)
+    record.setUint16(28, nameBytes.length, true)
+    record.setUint32(42, offset, true)
+
+    parts.push(new Uint8Array(local.buffer), nameBytes, bytes)
+    central.push(new Uint8Array(record.buffer), nameBytes)
+    offset += 30 + nameBytes.length + bytes.length
+  }
+
+  const indexSize = central.reduce((sum, part) => sum + part.length, 0)
+  const end = new DataView(new ArrayBuffer(22))
+  end.setUint32(0, 0x06054b50, true)
+  end.setUint16(8, entries.length, true)
+  end.setUint16(10, entries.length, true)
+  end.setUint32(12, indexSize, true)
+  end.setUint32(16, offset, true)
+
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)])
 }
 
 /**

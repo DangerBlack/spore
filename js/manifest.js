@@ -72,6 +72,24 @@ export const SIGNATURE_FILE = 'spore.sig'
 export const MAX_MANIFEST_BYTES = 4_000_000
 
 /**
+ * The largest single file this gate will hash.
+ *
+ * WebCrypto has no streaming digest, so describing a file means holding all of
+ * it at once. Everything else about publishing is streamed — a stored archive
+ * entry reaches the swarm as a slice of the file on disk and never becomes
+ * memory — and this is the one place that cannot be, so it is the one place
+ * with a number.
+ *
+ * Above it a site is published exactly as it arrived: not hashed, not checked,
+ * not signed, and not stripped of whatever signature it came with. That is the
+ * honest outcome rather than a tab that dies during "Hashing 2 files…", and it
+ * still puts a film in a swarm, which is the thing that matters.
+ *
+ * A guess, like the archive numbers, and wanting the same phone to measure it.
+ */
+export const MAX_HASHABLE_BYTES = 512_000_000
+
+/**
  * Would signing these paths produce a manifest no reader will open?
  *
  * Answered from the paths alone, before anything is hashed, because the cost of

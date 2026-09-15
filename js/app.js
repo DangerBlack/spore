@@ -25,8 +25,8 @@ import {
   MAX_KEY_BYTES, avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
 } from './identity.js'
 import {
-  MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed, missingFrom,
-  signManifest, unlistedIn, verifyManifest
+  MAX_HASHABLE_BYTES, MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries,
+  manifestWouldExceed, missingFrom, signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
@@ -1656,7 +1656,13 @@ function showListing (torrent) {
 
   ui.scripts.disabled = true
   ui.scriptsLabel.hidden = true
-  ui.keep.checked = false
+  // Asked rather than assumed. This used to run only on a fresh open, where
+  // "not kept" was true by construction; it is now also how the stage is put
+  // back after a publish is refused, and a reader who had kept the listing
+  // watched the tick disappear while the site stayed on disk.
+  isKept(torrent.infoHash).then(kept => {
+    if (current?.torrent === torrent) ui.keep.checked = kept
+  }).catch(() => {})
   ui.keepLabel.hidden = false
   ui.keep.disabled = false
   ui.saveTorrent.hidden = false
@@ -1822,13 +1828,14 @@ function wireDropTarget () {
   })
 
   ui.folder.addEventListener('change', async () => {
-    const { files, name } = filesFromInput(ui.folder)
+    const picked = [...ui.folder.files]
     ui.folder.value = '' // let the same folder be picked twice
     // Awaited and caught like the other two. This one was left bare, and
     // `verifiesAsItStands` now lets a read error through on purpose, so a file
     // that became unreadable between being picked and being hashed made the
     // page do nothing at all — the exact failure the other two were fixed for.
     try {
+      const { files, name } = await filesFromInput({ files: picked })
       await seed(files, name)
     } catch (err) {
       failToPublish(err)
@@ -1944,11 +1951,19 @@ async function publishOne (files, name) {
   // large folder sat on an idle landing page for as long as it took, with
   // nothing to show the click had done anything. Every other slow step here
   // announces itself.
-  if (entry) busy('Checking the signature it came with…')
-  const mirror = entry ? await verifiesAsItStands(files) : false
+  // A file too large to hold cannot be checked, signed, or judged stale — all
+  // three need its bytes. Such a site goes out exactly as it arrived, keeping
+  // whatever signature came with it, which is the honest outcome and still puts
+  // a film in a swarm.
+  const tooLargeToHash = files.some(file => file.size > MAX_HASHABLE_BYTES)
+
+  if (entry && !tooLargeToHash) busy('Checking the signature it came with…')
+  const mirror = entry && !tooLargeToHash ? await verifiesAsItStands(files) : false
   if (entry && !mirror) ui.notice.hidden = true
-  const hadKey = !mirror && files.some(file => pathOf(file) === 'spore.pub')
-  if (!mirror) files = stripSignature(files)
+
+  const hadKey = !mirror && !tooLargeToHash &&
+    files.some(file => pathOf(file) === 'spore.pub')
+  if (!mirror && !tooLargeToHash) files = stripSignature(files)
 
   // A manifest is one line per file, and a reader refuses one too large to be
   // a manifest — it is reading a stranger's torrent. A site with thousands of
@@ -1956,7 +1971,7 @@ async function publishOne (files, name) {
   // only produce a signature nobody will open.
   const tooBigToSign = manifestWouldExceed(files.map(pathOf))
 
-  const decision = entry && !mirror && !tooBigToSign
+  const decision = entry && !mirror && !tooBigToSign && !tooLargeToHash
     ? await askAboutSigning(name)
     : { sign: false, site: null }
 
@@ -1980,7 +1995,8 @@ async function publishOne (files, name) {
       dropped: cleaned.dropped,
       discarded: hadKey && !decision.sign,
       replaced: hadKey && decision.sign,
-      tooBigToSign: tooBigToSign && Boolean(entry)
+      tooBigToSign: tooBigToSign && Boolean(entry) && !tooLargeToHash,
+      tooLargeToHash: tooLargeToHash && Boolean(entry)
     })
 
     // Announced before navigating: navigating replaces the site on screen, and
@@ -2056,7 +2072,9 @@ async function verifiesAsItStands (files) {
  * the notice bar is not the place: `busy()` overwrites it and rendering the
  * site clears it, so a sentence put there appears and vanishes.
  */
-function noteWhatChanged ({ renamed, mirror, dropped, discarded, replaced, tooBigToSign }) {
+function noteWhatChanged ({
+  renamed, mirror, dropped, discarded, replaced, tooBigToSign, tooLargeToHash
+}) {
   const said = []
 
   if (renamed) {
@@ -2090,6 +2108,13 @@ function noteWhatChanged ({ renamed, mirror, dropped, discarded, replaced, tooBi
     said.push('It has too many files to sign: the list of hashes would be ' +
       'larger than a reader will open, so a signature would have gone out that ' +
       'nobody could check. It is published unsigned instead.')
+  }
+
+  if (tooLargeToHash) {
+    said.push('It holds a file too large to hash here, so it was published ' +
+      'exactly as it arrived: not signed by you, and not stripped of anything ' +
+      'it came with. Describing a file means holding all of it at once, and ' +
+      'that one does not fit.')
   }
 
   ui.shareUnsigned.textContent = said.join(' ')

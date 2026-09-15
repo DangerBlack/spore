@@ -140,13 +140,6 @@ async function readCentralDirectory (blob) {
     throw new ZipError('That archive’s index is larger than its contents allow.')
   }
 
-  // Bytes are not the only budget. Sixty-five thousand empty entries weigh
-  // nothing and stay under every cap above, while each one becomes a File, a
-  // torrent entry, a manifest line and a row in the file list — a bomb made of
-  // metadata rather than of data.
-  if (count > ZIP_MAX_ENTRIES) {
-    throw new ZipError(`That archive holds more than ${ZIP_MAX_ENTRIES} files.`)
-  }
 
   const index = await slice(blob, at0, at0 + size)
   const entries = []
@@ -239,6 +232,19 @@ async function readCentralDirectory (blob) {
     }
     seen.add(entry.path)
     entries.push(entry)
+  }
+
+  // Bytes are not the only budget. Each entry becomes a File, a torrent entry, a
+  // manifest line and a row in the file list, so a thousand empty ones weigh
+  // nothing and still cost — a bomb made of metadata rather than of data.
+  //
+  // Counted here, after directory records and `__MACOSX/` have been dropped,
+  // rather than from the number the end record declares. A folder compressed by
+  // the Finder carries a `._` record per file and a record per directory, so a
+  // site of seven hundred real files can declare far more than that — and it
+  // was refused with a sentence that was false about the thing its author had.
+  if (entries.length > ZIP_MAX_ENTRIES) {
+    throw new ZipError(`That archive holds more than ${ZIP_MAX_ENTRIES} files.`)
   }
 
   return entries
