@@ -13,8 +13,7 @@ import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne }
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
-  asSite, checkPublishable, dropJunk, entryFor, filesFromDrop, filesFromInput, filesFromPicker,
-  pathOf, publish
+  checkPublishable, filesFromDrop, filesFromInput, filesFromPicker, publish
 } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
@@ -29,7 +28,9 @@ import {
   MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed, missingFrom,
   signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
-import { entryURL, filePaths, findEntry, readManifest, readSporePub } from './site.js'
+import {
+  asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
+} from './site.js'
 import { SiteNotFound, getClient, openTorrent, startClient, startWorker } from './swarm.js'
 import { watchForUpdates } from './updates.js'
 import {

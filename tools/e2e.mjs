@@ -361,6 +361,7 @@ async function run () {
   await checkRepublishing()
   await checkEveryShapeAgrees()
   await checkJunkRulesMatchTheLibrary()
+  await checkShapesNobodyChose()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
@@ -841,7 +842,7 @@ async function checkRepublishing () {
   // here looked for the shallowest index.html anywhere in the tree, and that
   // flexibility was where the publisher and the reader learned to disagree.
   const rules = await page.evaluate(async () => {
-    const { asSite, entryFor } = await import('/js/publish.js')
+    const { asSite, entryFor } = await import('/js/site.js')
     const file = path => Object.assign(new File(['x'], path.split('/').pop(),
       { type: 'text/html' }), { fullPath: path })
 
@@ -1336,8 +1337,8 @@ async function checkEveryShapeAgrees () {
   ]
 
   const answers = await page.evaluate(async cases => {
-    const { asSite, entryFor, publish } = await import('/js/publish.js')
-    const { findEntry } = await import('/js/site.js')
+    const { publish } = await import('/js/publish.js')
+    const { asSite, entryFor, findEntry } = await import('/js/site.js')
 
     const out = []
     for (const [label, paths, folder] of cases) {
@@ -1429,6 +1430,60 @@ async function checkJunkRulesMatchTheLibrary () {
 async function parseTorrentFile (buffer) {
   const mod = await import('parse-torrent')
   return (mod.default ?? mod)(buffer)
+}
+
+/**
+ * The agreement, on shapes nobody chose.
+ *
+ * `checkEveryShapeAgrees` tries eight layouts I thought of, which is exactly the
+ * weakness every defect on this branch exploited: the publisher and the reader
+ * agreed on everything anyone had tried. This tries a hundred and twenty nobody
+ * tried, building each torrent for real so the comparison is against what
+ * `create-torrent` actually does rather than against my reading of it.
+ *
+ * Seeded, so a failure is reproducible: the seed is printed with the result.
+ */
+async function checkShapesNobodyChose () {
+  const createTorrent = (await import('create-torrent')).default
+  const { asSite, chooseEntry, entryFor } = await import(`file://${process.cwd()}/js/site.js`)
+
+  const seed = Number(process.env.SPORE_SHAPES_SEED ?? 20260915)
+  let state = seed
+  const random = () => (state = (state * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
+  const pick = list => list[Math.floor(random() * list.length)]
+
+  const folders = ['site', 'docs', 'a', 'b', 'assets']
+  const leaves = ['index.html', 'post.html', 'a.css', 'photo.jpg', 'notes.txt']
+  const shape = () => [...Array(Math.floor(random() * 3))]
+    .map(() => pick(folders)).concat(pick(leaves)).join('/')
+
+  const disagreed = []
+  for (let i = 0; i < 120; i++) {
+    const paths = [...new Set([...Array(1 + Math.floor(random() * 4))].map(shape))]
+    const files = paths.map(path => {
+      const file = new File(['x'], path.split('/').pop())
+      file.fullPath = path
+      return file
+    })
+
+    const site = asSite(files)
+    const publisher = entryFor(site.files)
+    const options = site.files.length === 1
+      ? { filterJunkFiles: false }
+      : { name: site.name ?? 'site', filterJunkFiles: false }
+
+    const torrent = await parseTorrentFile(await new Promise((resolve, reject) =>
+      createTorrent(site.files, options, (err, buf) => err ? reject(err) : resolve(buf))))
+    const reader = chooseEntry(torrent.files.map(file => file.path))
+
+    if (Boolean(publisher) !== Boolean(reader)) {
+      disagreed.push(`${JSON.stringify(paths)} -> ${publisher} / ${reader}`)
+    }
+  }
+
+  check('publisher and reader agree on a hundred and twenty shapes nobody chose',
+    disagreed.length === 0,
+    disagreed.length ? `seed ${seed}: ${disagreed[0]}` : `seed ${seed}`)
 }
 
 /**
