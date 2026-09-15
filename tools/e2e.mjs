@@ -851,7 +851,8 @@ async function checkRepublishing () {
       onePage: ask(['il-mio-post.html']),
       pageAndAsset: ask(['post.html', 'photo.jpg']),
       nested: ask(['site/docs/index.html', 'site/a.css']),
-      twoPages: ask(['one.html', 'two.html'])
+      twoPages: ask(['one.html', 'two.html']),
+      twoFolders: ask(['site/index.html', 'other/x.txt'])
     }
   })
 
@@ -866,6 +867,12 @@ async function checkRepublishing () {
     rules.nested.entry === null, JSON.stringify(rules.nested))
   check('two pages and no index is a list of files, not a guess',
     rules.twoPages.entry === null, JSON.stringify(rules.twoPages))
+
+  // Two folders dropped at once. BitTorrent wraps them in a third, so the entry
+  // ends up two deep and the reader shows a list — and the publisher used to
+  // see an entry here and sign something nobody would ever check.
+  check('and two folders at once agree with what the reader will see: a list',
+    rules.twoFolders.entry === null, JSON.stringify(rules.twoFolders))
 
   // --- somebody else's key, without a signature that stands up ---------------
   // Two outcomes and no third. This is the second one: the declaration does not

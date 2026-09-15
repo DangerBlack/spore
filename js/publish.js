@@ -8,7 +8,6 @@
  * takes the site offline — that is the honest limit of the MVP.
  */
 
-import { chooseEntry } from './site.js'
 import { seedTorrent } from './swarm.js'
 
 /**
@@ -172,8 +171,20 @@ export function checkPublishable (files) {
  * @returns {string|null}
  */
 export function entryFor (files) {
-  return chooseEntry(files.map(pathOf))
+  // Anchored at this set's own root, not at "one folder deep". The reader's
+  // rule tolerates exactly one leading folder because BitTorrent always adds
+  // exactly one; applied to paths *before* seeding, that same tolerance accepts
+  // a folder that is not the torrent's. Drop two folders at once and the
+  // publisher saw an entry at `sito/index.html` while the reader, handed
+  // `index/sito/index.html`, saw a list of files — the publisher signing
+  // something nobody would ever check. The two questions have to be the same
+  // question, and this is the half that is asked before the torrent exists.
+  const root = siteRoot(files)
+  return files.map(pathOf).find(path => ENTRY_IN_ROOT(root).test(path)) ?? null
 }
+
+const ENTRY_IN_ROOT = root =>
+  new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}index\\.html?$`, 'i')
 
 /** One spelling of a file's path, used by everything that compares them. */
 export function pathOf (file) {
