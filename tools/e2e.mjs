@@ -356,8 +356,8 @@ async function run () {
   await checkPublishingByDrop(page)
   await checkPublishingFromThePicker(page)
   await checkSignatureLandsWhereReadersLook()
-  await checkArchiveWithSomethingBesideTheSite()
-  await checkWhatMustNotBeSigned()
+  await checkAFolderCompressedOnAMac()
+  await checkRepublishing()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
@@ -764,41 +764,24 @@ async function checkSignatureLandsWhereReadersLook () {
 }
 
 /**
- * An archive with something beside the site in it, published signed.
+ * A folder compressed on a Mac, which is two top levels rather than one.
  *
- * `__MACOSX/` is not an exotic shape: it is what macOS's own "Compress" puts
- * next to any folder it compresses. Readers are scoped to the entry page's
- * directory, signing was not, and the manifest therefore described a file no
- * verifier could see — which reads as **broken**, not as unsigned. Every signed
- * publication of an ordinary Mac-made zip accused itself of being tampered with.
+ * `__MACOSX/` is resource forks, not content, and macOS writes it beside
+ * anything its Compress command touches. Left in, the archive has no
+ * `index.html` in its root, so a folder compressed the ordinary way on the
+ * commonest desktop would open as a list of files instead of as a site. It is
+ * dropped by name — the one piece of rubbish common enough to earn a rule.
  */
-async function checkArchiveWithSomethingBesideTheSite () {
+async function checkAFolderCompressedOnAMac () {
   const page = await browser.createBrowserContext().then(c => c.newPage())
   await page.goto(origin + '/', { waitUntil: 'load' })
   await page.waitForFunction(
     () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
 
   await pick(page, [{ name: 'site.zip', type: 'application/zip', base64: MAC_STYLE_ZIP }])
-
-  // Either dialog is waited for, not just the expected one: a gate that skipped
-  // the warning should fail the checks below rather than time out here, which
-  // says nothing about what went wrong.
-  await page.waitForFunction(() =>
-    document.getElementById('outside-dialog').open ||
-    document.getElementById('signin-dialog').open, { timeout: 20_000 })
-
-  const told = await page.evaluate(() => ({
-    asked: document.getElementById('outside-dialog').open,
-    root: document.getElementById('outside-root').textContent,
-    files: document.getElementById('outside-files').textContent
-  }))
-  check('an archive with a second top level says what is not part of the site',
-    told.asked && told.root === 'site/' && told.files.includes('__MACOSX'),
-    JSON.stringify(told))
-
-  if (told.asked) await page.click('#outside-accept')
   await page.waitForFunction(
     () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
   await page.type('#signin-label', 'Mac')
   await page.type('#signin-passphrase', 'another long enough phrase to sign with')
   await page.click('#signin-continue')
@@ -818,63 +801,77 @@ async function checkArchiveWithSomethingBesideTheSite () {
     const { getClient } = await import('/js/swarm.js')
     return (await getClient().get(infoHash)).files.map(file => file.path)
   }, hash)
-  check('what is not part of the site is not published either',
+
+  check('a folder compressed on a Mac opens as a site, not as a list of files',
+    paths.some(path => /^[^/]+\/index\.html$/.test(path)), JSON.stringify(paths))
+  check('and the resource forks are not published with it',
     !paths.some(path => path.includes('__MACOSX')), JSON.stringify(paths))
 
-  // The verdict the reader reaches, which is the thing that was wrong. "broken"
-  // is not a milder "unverified": it is the gate saying somebody altered this.
   await page.waitForFunction(
     () => !document.getElementById('author').hidden, { timeout: 30_000 })
   await page.waitForFunction(
     () => document.getElementById('author').dataset.state !== 'checking', { timeout: 30_000 })
-  const verdict = await page.$eval('#author', el => el.dataset.state)
-  check('and the site it publishes reads as verified, not as tampered with',
-    verdict === 'verified', verdict)
+  check('and it reads as verified, not as tampered with',
+    await page.$eval('#author', el => el.dataset.state) === 'verified',
+    await page.$eval('#author', el => el.dataset.state))
 
   await page.close()
 }
 
 /**
- * Two things the gate must not sign, found by looking rather than by review.
+ * What the gate does with a publication that arrives already claiming an author.
  *
- * Both are the shape every real finding on this branch has had: two pieces of
- * code answering one question differently, agreeing on everything anyone had
- * tried, and disagreeing on an input nobody had.
+ * Two outcomes and no third: either it verifies exactly as it stands and is
+ * republished untouched — still its author's, which is what a mirror is — or
+ * its key and signature are thrown away and the publisher signs their own.
+ * Everything in between produced a site that accused itself of being altered.
  */
-async function checkWhatMustNotBeSigned () {
+async function checkRepublishing () {
   const page = await browser.createBrowserContext().then(c => c.newPage())
   await page.goto(origin + '/', { waitUntil: 'load' })
   await page.waitForFunction(
     () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
 
-  // --- a file list spread over directories is not a site with strays ---------
-  // `rootFor` falls back to the first file when there is no entry page, which
-  // is meant for naming a torrent. Scoping to it would drop every other branch
-  // and then announce a "site" that never existed.
-  const spread = await page.evaluate(async () => {
-    const { siteFiles } = await import('/js/publish.js')
-    const file = path => Object.assign(new File(['x'], path.split('/').pop()), { fullPath: path })
-    const listed = siteFiles([file('docs/one.html'), file('notes/two.html')])
-    const site = siteFiles([file('site/index.html'), file('__MACOSX/x')])
+  // --- the rules a site is held to, asked directly ---------------------------
+  // One rule, not a search: `index.html` in the site's root and nowhere else,
+  // and a single page becomes it whatever the author called it. What used to be
+  // here looked for the shallowest index.html anywhere in the tree, and that
+  // flexibility was where the publisher and the reader learned to disagree.
+  const rules = await page.evaluate(async () => {
+    const { asSite, entryFor } = await import('/js/publish.js')
+    const file = path => Object.assign(new File(['x'], path.split('/').pop(),
+      { type: 'text/html' }), { fullPath: path })
+
+    const ask = paths => {
+      const site = asSite(paths.map(file))
+      return { entry: entryFor(site.files), renamed: site.renamed?.to ?? null }
+    }
     return {
-      listedKept: listed.files.length,
-      listedOutside: listed.outside.length,
-      siteKept: site.files.map(f => f.fullPath),
-      siteOutside: site.outside.map(f => f.fullPath)
+      folder: ask(['site/index.html', 'site/css/a.css']),
+      onePage: ask(['il-mio-post.html']),
+      pageAndAsset: ask(['post.html', 'photo.jpg']),
+      nested: ask(['site/docs/index.html', 'site/a.css']),
+      twoPages: ask(['one.html', 'two.html'])
     }
   })
-  check('files with no entry page are all published, not scoped to the first one',
-    spread.listedKept === 2 && spread.listedOutside === 0, JSON.stringify(spread))
-  check('and a real site still leaves what is not part of it behind',
-    spread.siteOutside.length === 1 && spread.siteKept.length === 1, JSON.stringify(spread))
 
-  // --- a folder that already declares somebody else's key --------------------
-  // Republishing another person's site is supported. Signing it is not: the
-  // signature is checked against the key the site declares, and a mismatch
-  // reads as "altered", not as "signed by someone else". The publisher is taken
-  // through the whole signing ceremony here on purpose — that is where an
-  // identity arrives, and a guard that only looked before it protected nobody
-  // publishing for the first time.
+  check('a folder with index.html at its top is the site',
+    rules.folder.entry === 'site/index.html', JSON.stringify(rules.folder))
+  check('a single page becomes index.html, whatever it was called',
+    rules.onePage.entry === 'index.html' && rules.onePage.renamed === 'index.html',
+    JSON.stringify(rules.onePage))
+  check('and so does a page with its own images beside it',
+    rules.pageAndAsset.entry === 'index.html', JSON.stringify(rules.pageAndAsset))
+  check('an index.html buried deeper is not the entry: nothing is searched for',
+    rules.nested.entry === null, JSON.stringify(rules.nested))
+  check('two pages and no index is a list of files, not a guess',
+    rules.twoPages.entry === null, JSON.stringify(rules.twoPages))
+
+  // --- somebody else's key, without a signature that stands up ---------------
+  // Two outcomes and no third. This is the second one: the declaration does not
+  // verify, so it is thrown away and the publisher's own takes its place. The
+  // first outcome — a publication that verifies exactly as it arrived — is
+  // checked below, on a site this suite actually signed.
   const theirKey = 'f'.repeat(64)
   await pick(page, [
     { name: 'index.html', type: 'text/html', text: '<h1>a mirror</h1>' },
@@ -895,23 +892,78 @@ async function checkWhatMustNotBeSigned () {
   await page.type('#signin-new-series', 'mirror')
   await page.click('#signin-use-known')
 
-  await page.waitForFunction(
-    () => !document.getElementById('share').hidden, { timeout: 40_000 })
-
-  const said = await page.evaluate(() => document.getElementById('share-unsigned').hidden
-    ? '' : document.getElementById('share-unsigned').textContent)
-  check('the publisher is told their key was not written over somebody else\u2019s',
-    said.includes('signed by nobody'), said.slice(0, 70))
-
-  const files = await page.evaluate(async () => {
+  const mirrored = await settled(page, '')
+  const declared = await page.evaluate(async link => {
     const { getClient } = await import('/js/swarm.js')
-    const torrent = getClient().torrents[getClient().torrents.length - 1]
-    return torrent.files.map(f => f.path)
-  })
-  check('and no signature is written that every reader would read as tampering',
-    !files.some(path => /spore\.sig$/.test(path)), JSON.stringify(files))
-  check('while the key the site declares is left exactly as it was',
-    files.some(path => /spore\.pub$/.test(path)), JSON.stringify(files))
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const file = torrent.files.find(f => /spore\.pub$/.test(f.path))
+    return {
+      paths: torrent.files.map(f => f.path),
+      key: new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()))
+    }
+  }, mirrored)
+
+  check('a key that carries no signature that stands up is thrown away',
+    !declared.key.includes(theirKey), declared.key.split('\n')[0].slice(0, 20))
+  check('and the publisher signs it as their own instead',
+    declared.paths.some(path => /spore\.sig$/.test(path)), JSON.stringify(declared.paths))
+
+  // --- and the first outcome: a publication that still verifies ---------------
+  // Taken out of the torrent the check above just signed, and handed back in.
+  // This is the round trip a mirror is: nobody is asked for a passphrase,
+  // because the site is already somebody's and is not about to become anybody
+  // else's.
+  const theirs = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const out = []
+    for (const file of torrent.files) {
+      out.push({
+        name: file.path.slice(file.path.indexOf('/') + 1),
+        bytes: [...new Uint8Array(await file.arrayBuffer())]
+      })
+    }
+    return out
+  }, mirrored)
+
+  await page.evaluate(files => {
+    document.getElementById('share-unsigned').hidden = true
+    const data = new DataTransfer()
+    for (const file of files) {
+      data.items.add(new File([new Uint8Array(file.bytes)], file.name))
+    }
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, theirs)
+
+  // Not a new link: an identical one. A publication that is not touched hashes
+  // to what it hashed before, which is the strongest thing a mirror can say —
+  // the copy is the original, not a copy of it.
+  await page.waitForFunction(
+    () => !document.getElementById('share-unsigned').hidden, { timeout: 40_000 })
+
+  const untouched = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const file = torrent.files.find(f => /spore\.pub$/.test(f.path))
+    return {
+      asked: document.getElementById('signin-dialog').open,
+      said: document.getElementById('share-unsigned').textContent,
+      link: document.getElementById('share-link').value,
+      key: new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()))
+    }
+  }, mirrored)
+
+  check('a publication that still verifies is republished without being asked about',
+    !untouched.asked, String(untouched.asked))
+  check('and it hashes to exactly what it hashed before, so the mirror is the original',
+    untouched.link === mirrored, `${untouched.link.slice(-20)} vs ${mirrored.slice(-20)}`)
+  check('and it keeps the key it arrived with, rather than the publisher\u2019s',
+    untouched.key.split('\n')[0] === declared.key.split('\n')[0],
+    untouched.key.split('\n')[0].slice(0, 20))
+  check('and the publisher is told it stayed its author\u2019s',
+    untouched.said.includes('still its author'), untouched.said.slice(0, 60))
 
   // --- a site that has already been signed once ------------------------------
   // The folder somebody re-publishes is the one they downloaded, or the one a
@@ -2298,7 +2350,7 @@ async function checkMobileLayout () {
     // Every dialog: inside the screen, with a gutter, and scrollable to its
     // buttons rather than running off the bottom.
     for (const id of ['signin-dialog', 'author-dialog', 'diagnostics',
-      'isolation-dialog', 'no-entry-dialog', 'outside-dialog']) {
+      'isolation-dialog', 'no-entry-dialog']) {
       const fit = await page.evaluate(dialogId => {
         if (dialogId === 'signin-dialog') {
           document.getElementById('signin-step-enter').hidden = false

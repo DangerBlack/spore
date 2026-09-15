@@ -181,65 +181,64 @@ export function pathOf (file) {
 }
 
 /**
- * The directory the site's own files sit in, as the reader will see it.
+ * A set of files as the site it is meant to be.
  *
- * Derived from the entry page and nowhere else. Signing used to find its own
- * root with `files.find(...)`, which takes the *first* `index.html` in array
- * order, while readers open the *shallowest* one. A zip controls that order, so
- * an archive holding `nested/index.html` before `index.html` put `spore.pub`
- * and `spore.sig` under `nested/` while readers looked beside the shallow page
- * — a correctly signed site reading as unsigned, which is the worst way for a
- * signature to fail, because nothing is wrong except where it was put.
+ * One rule, and only one: the entry page is `index.html` in the site's root.
+ * When there is no `index.html` there but exactly one page, that page *becomes*
+ * `index.html` — because a person who picks `il-mio-post.html` on a phone means
+ * it to be the site, and the alternative is telling them to rename a file with
+ * tools they do not have.
+ *
+ * This renames a path and nothing else. The bytes are the author's bytes, the
+ * File is the same File, and the original name is kept for the magnet so the
+ * link still says what the thing is called. Anything more ambiguous than "one
+ * page" is left exactly as it is and published as a browsable list of files.
  *
  * @param {File[]} files
- * @returns {string} '' for the top of the torrent, otherwise a trailing slash
+ * @returns {{files: File[], renamed: {from: string, to: string}|null, name: string|null}}
  */
-export function rootFor (files) {
-  const entry = entryFor(files) ?? pathOf(files[0])
-  return entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : ''
+export function asSite (files) {
+  if (entryFor(files)) return { files, renamed: null, name: null }
+
+  const prefix = sharedTop(files.map(pathOf))
+  const pages = files.filter(file => {
+    const rest = pathOf(file).slice(prefix.length)
+    return !rest.includes('/') && /\.html?$/i.test(rest)
+  })
+  if (pages.length !== 1) return { files, renamed: null, name: null }
+
+  const from = pathOf(pages[0])
+  const to = `${prefix}index.html`
+
+  // A new File over the same Blob: the contents are referenced, not copied, so
+  // renaming a film-sized page costs nothing.
+  const renamedFile = new File([pages[0]], 'index.html',
+    { type: pages[0].type, lastModified: pages[0].lastModified })
+  renamedFile.fullPath = to
+
+  return {
+    files: files.map(file => (file === pages[0] ? renamedFile : file)),
+    renamed: { from, to },
+    name: from.slice(from.lastIndexOf('/') + 1).replace(/\.html?$/i, '') || null
+  }
 }
 
 /**
- * The files that are actually the site, and the ones that merely came with it.
+ * The site's root: the one folder every file sits in, or the top of the set.
  *
- * A set of files can have more than one top level: `site/index.html` beside a
- * stray `README.md`, or — the common case, because it is what macOS's own
- * "Compress" produces — `site/` beside `__MACOSX/`. Readers are scoped to the
- * entry's directory: `readSporePub` looks beside the entry page and
- * `verifyContent` lists the files under that root. Signing was not scoped at
- * all, so it hashed the strays too, and the manifest then listed files that a
- * verifier could not see. The result was not "unverified" but **broken**: every
- * signed publication of an ordinary Mac-made archive accused itself of having
- * been tampered with.
- *
- * So the site is the entry's subtree, and nothing else travels with it. What is
- * left out is returned rather than dropped, because the caller has to say so —
- * removing files from somebody's publication without telling them is the same
- * repair this codebase refuses everywhere else.
- *
- * @param {File[]} files
- * @returns {{files: File[], root: string, outside: File[]}}
+ * Exported because signing needs the same answer, and the last time these were
+ * two separate calculations a correctly signed site read as unsigned.
  */
-export function siteFiles (files) {
-  // Asked of the entry itself, not of `rootFor`, whose fallback to the first
-  // file is meant for naming a torrent and means nothing here. A set with no
-  // entry page is a file list, not a site with strays around it: scoping it to
-  // whichever file happened to come first would quietly drop the rest and then
-  // announce a "site" that was never there.
-  const entry = entryFor(files)
-  if (!entry || !entry.includes('/')) return { files, root: '', outside: [] }
+export function siteRoot (files) {
+  return sharedTop(files.map(pathOf))
+}
 
-  const root = entry.slice(0, entry.lastIndexOf('/') + 1)
-  const inside = []
-  const outside = []
-  for (const file of files) {
-    // Through `pathOf`, because `entryFor` normalises backslashes and this did
-    // not: a name containing one could be chosen as the entry under `dir/` and
-    // then classified as sitting outside it, which is one comparison disagreeing
-    // with itself.
-    ;(pathOf(file).startsWith(root) ? inside : outside).push(file)
-  }
-  return { files: inside, root, outside }
+function sharedTop (paths) {
+  const cut = paths[0]?.indexOf('/') ?? -1
+  if (cut < 1) return ''
+
+  const top = paths[0].slice(0, cut + 1)
+  return paths.every(path => path.startsWith(top)) ? top : ''
 }
 
 async function collect (entry, out, prefix = '') {

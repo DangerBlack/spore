@@ -141,15 +141,17 @@ any name works too, and a set of files with no entry page publishes as a
 browsable file list, which Spore says before it seeds anything rather than
 after.
 
-The site is the entry page's folder and everything under it. An archive with a
-second top level — `__MACOSX/` beside your folder, say, which is what macOS
-produces — has that second part named and left out before anything is signed,
-because a reader can only check what sits beside the page they opened. And a
-folder that already declares somebody else's `spore.pub` is published without
-being re-signed by you — if it carries their signature too, it stays verified
-under their key, which is what a faithful mirror should be. A signature from you
-beside a key that is not yours would read to every reader as the site having
-been altered. The files are hashed in your browser and never sent to a server. You get
+The site is the torrent's root folder: `index.html` lives there, and so do
+`spore.pub` and `spore.sig` if the site is signed. Nothing is searched for
+deeper down. A single page is published as `index.html` whatever you called it,
+and `__MACOSX/` is dropped, so a folder compressed on a Mac opens as a site.
+
+Republishing somebody else's site has two outcomes and no third: if it still
+verifies exactly as it arrived it goes out untouched and stays theirs — the
+mirror hashes to what the original hashed — and otherwise its key and signature
+are thrown away and you sign your own.
+
+The files are hashed in your browser and never sent to a server. You get
 a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.
