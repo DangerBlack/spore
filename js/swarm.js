@@ -194,10 +194,21 @@ export async function openTorrent (magnetURI, onJoin = () => {}) {
  */
 export function seedTorrent (files, opts) {
   return new Promise((resolve, reject) => {
+    // Detached once the seed has settled. WebTorrent hands a torrent's error to
+    // the client only while the torrent itself has no listener, so leaving this
+    // one attached made every later failure of that torrent disappear into an
+    // already-resolved promise — the gate would go on showing a share link for
+    // a swarm that had stopped existing.
     let torrent
+    const settle = seeded => {
+      seeded?.removeListener?.('error', reject)
+      torrent?.removeListener?.('error', reject)
+      resolve(seeded)
+    }
+
     try {
       torrent = getClient().seed(
-        files, { announceList: DEFAULT_TRACKERS.map(t => [t]), ...opts }, resolve)
+        files, { announceList: DEFAULT_TRACKERS.map(t => [t]), ...opts }, settle)
     } catch (err) {
       return reject(err)
     }
