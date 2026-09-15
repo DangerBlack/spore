@@ -19,6 +19,7 @@
  */
 
 import { TORRENT_PATH } from './config.js'
+import { MAX_MANIFEST_BYTES } from './manifest.js'
 
 /** `index.html` directly inside the torrent's single root folder, or alone. */
 const ENTRY = /^(?:[^/]+\/)?index\.html?$/i
@@ -104,9 +105,11 @@ export async function readManifest (torrent, entryPath) {
 
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    // A manifest is one line per file. Something far larger is not one, and
-    // hashing it to find that out would be the wrong order of operations.
-    if (bytes.length > 512 * 1024) return null
+    // A manifest is one line per file, and this is read out of a stranger's
+    // torrent, so something far larger is not one and decoding it to find that
+    // out would be the wrong order of operations. The same number bounds what
+    // this gate will sign, so an honest site can never make one this refuses.
+    if (bytes.length > MAX_MANIFEST_BYTES) return null
     return { contents: new TextDecoder().decode(bytes), root }
   } catch {
     return null

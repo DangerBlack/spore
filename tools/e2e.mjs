@@ -874,6 +874,27 @@ async function checkRepublishing () {
   check('and two folders at once agree with what the reader will see: a list',
     rules.twoFolders.entry === null, JSON.stringify(rules.twoFolders))
 
+  // --- the size a signature may be, agreed on both sides ---------------------
+  // The reader refuses a spore.sig too large to be one, because it is reading a
+  // stranger's torrent. The publisher has to refuse to make one, or an honest
+  // site with thousands of files goes out correctly signed and shows as
+  // unsigned to everybody, with nothing anywhere saying why. The old reader
+  // limit was half a megabyte, which a photo gallery passes.
+  const manifest = await page.evaluate(async () => {
+    const { manifestWouldExceed, MAX_MANIFEST_BYTES } = await import('/js/manifest.js')
+    const paths = (n, len) => Array.from({ length: n }, (_, i) => `p/${i}`.padEnd(len, 'x'))
+    return {
+      cap: MAX_MANIFEST_BYTES,
+      gallery: manifestWouldExceed(paths(5_000, 30)),
+      bigSite: manifestWouldExceed(paths(40_000, 22)),
+      absurd: manifestWouldExceed(paths(100_000, 20))
+    }
+  })
+  check('a site with thousands of files can still be signed',
+    !manifest.gallery && !manifest.bigSite, JSON.stringify(manifest))
+  check('and one whose signature no reader would open is not offered the chance',
+    manifest.absurd, JSON.stringify(manifest))
+
   // --- somebody else's key, without a signature that stands up ---------------
   // Two outcomes and no third. This is the second one: the declaration does not
   // verify, so it is thrown away and the publisher's own takes its place. The
