@@ -45,18 +45,26 @@ export async function filesFromDrop (dataTransfer) {
   return await fromLooseFiles(files)
 }
 
-/** Files chosen through `<input type="file" webkitdirectory>`. */
-export function filesFromInput (input) {
+/**
+ * Files chosen through `<input type="file" webkitdirectory>`.
+ *
+ * Which is not always a folder. `webkitdirectory` degrades to an ordinary file
+ * picker where directories cannot be chosen — iOS, the device this whole path
+ * exists for — and a person there taps "Choose a folder…" because it is the
+ * first button, picks `site.zip`, and used to get a one-file torrent containing
+ * an archive and a dialog saying there was no page to open. The drop handler and
+ * the other picker both unpack; the button an iOS user is most likely to press
+ * was the one that did not.
+ */
+export async function filesFromInput (input) {
   const files = [...input.files]
-  for (const file of files) {
-    if (file.webkitRelativePath) file.fullPath = file.webkitRelativePath
-  }
-  // `|| null`, not `??`: where `webkitdirectory` degrades to picking single
-  // files — iOS, the device this exists for — `webkitRelativePath` is the empty
-  // string rather than undefined, and `??` kept it. An empty name then beat the
-  // better one `asSite` works out from the page itself.
-  const name = files[0]?.webkitRelativePath?.split('/')[0] || null
-  return { files, name }
+  if (!files.some(file => file.webkitRelativePath)) return await fromLooseFiles(files)
+
+  for (const file of files) file.fullPath = file.webkitRelativePath
+  // `|| null`, not `??`: where `webkitdirectory` degrades, `webkitRelativePath`
+  // is the empty string rather than undefined, and `??` kept it. An empty name
+  // then beat the better one `asSite` works out from the page itself.
+  return { files, name: files[0]?.webkitRelativePath?.split('/')[0] || null }
 }
 
 /**
