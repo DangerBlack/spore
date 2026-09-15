@@ -19,6 +19,7 @@
  */
 
 import { TORRENT_PATH } from './config.js'
+import { MAX_KEY_BYTES } from './identity.js'
 import { MAX_MANIFEST_BYTES } from './manifest.js'
 
 /** `index.html` directly inside the torrent's single root folder, or alone. */
@@ -79,8 +80,8 @@ export async function readSporePub (torrent, entryPath) {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
     // A key file is a couple of lines. Anything larger is not one, and is not
-    // worth decoding to find that out.
-    if (bytes.length > 4096) return null
+    // worth decoding to find that out. The publisher checks the same number.
+    if (bytes.length > MAX_KEY_BYTES) return null
     const { parseSporePub } = await import('./identity.js')
     return parseSporePub(new TextDecoder().decode(bytes))
   } catch {

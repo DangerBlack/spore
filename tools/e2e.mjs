@@ -895,6 +895,24 @@ async function checkRepublishing () {
   check('and one whose signature no reader would open is not offered the chance',
     manifest.absurd, JSON.stringify(manifest))
 
+  // The publisher's "does this already verify?" has to apply the reader's own
+  // limits, or it republishes untouched a site every reader shows as unsigned.
+  const limits = await page.evaluate(async () => {
+    const { MAX_KEY_BYTES } = await import('/js/identity.js')
+    const { MAX_MANIFEST_BYTES } = await import('/js/manifest.js')
+    const source = await (await fetch('/js/app.js')).text()
+    const fn = source.slice(source.indexOf('async function verifiesAsItStands'))
+      .slice(0, source.slice(source.indexOf('async function verifiesAsItStands')).indexOf('\n}\n'))
+    return {
+      key: MAX_KEY_BYTES,
+      manifest: MAX_MANIFEST_BYTES,
+      applied: fn.includes('MAX_KEY_BYTES') && fn.includes('MAX_MANIFEST_BYTES')
+    }
+  })
+  check('and the publisher weighs a signature by the reader\u2019s limits, not its own',
+    limits.applied && limits.key === 4096 && limits.manifest === 4_000_000,
+    JSON.stringify(limits))
+
   // --- somebody else's key, without a signature that stands up ---------------
   // Two outcomes and no third. This is the second one: the declaration does not
   // verify, so it is thrown away and the publisher's own takes its place. The
