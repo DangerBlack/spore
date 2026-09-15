@@ -854,20 +854,29 @@ async function checkRepublishing () {
       onePage: ask(['il-mio-post.html']),
       pageAndAsset: ask(['post.html', 'photo.jpg']),
       nested: ask(['site/docs/index.html', 'site/a.css']),
+      wrapped: ask(['site/docs/index.html', 'site/docs/a.css']),
       twoPages: ask(['one.html', 'two.html']),
       twoFolders: ask(['site/index.html', 'other/x.txt'])
     }
   })
 
-  check('a folder with index.html at its top is the site',
-    rules.folder.entry === 'site/index.html', JSON.stringify(rules.folder))
+  // Always bare: `asSite` has made every path relative to the site's root, which
+  // is what leaves `create-torrent` nothing to strip and therefore leaves the
+  // list that gets signed and the list that gets published identical.
+  check('a folder with index.html at its top is the site, at the top',
+    rules.folder.entry === 'index.html', JSON.stringify(rules.folder))
   check('a single page becomes index.html, whatever it was called',
     rules.onePage.entry === 'index.html' && rules.onePage.renamed === 'index.html',
     JSON.stringify(rules.onePage))
   check('and so does a page with its own images beside it',
     rules.pageAndAsset.entry === 'index.html', JSON.stringify(rules.pageAndAsset))
-  check('an index.html buried deeper is not the entry: nothing is searched for',
+  // A folder that wraps *everything* comes off; one that wraps only the page
+  // does not, because a sibling is already at the root. So this is a list, and
+  // the reader agrees — which is the only thing that has to be true.
+  check('an index.html deeper than its siblings is not the entry',
     rules.nested.entry === null, JSON.stringify(rules.nested))
+  check('but folders wrapping the whole site come off, however many',
+    rules.wrapped.entry === 'index.html', JSON.stringify(rules.wrapped))
   check('two pages and no index is a list of files, not a guess',
     rules.twoPages.entry === null, JSON.stringify(rules.twoPages))
 

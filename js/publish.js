@@ -175,27 +175,19 @@ export function checkPublishable (files) {
 /**
  * What a reader will land on, or `null` if they will land on a file list.
  *
- * Asked with the same function the viewer uses, so the answer given to an
- * author at publishing time is the answer their readers get.
+ * `index.html` at the top of the set and nowhere else. There is no root to
+ * account for here because `asSite` has already removed it: the paths this sees
+ * are the paths that will be published, one folder shallower than the reader's
+ * only because BitTorrent adds that folder itself.
  *
  * @param {File[]} files
  * @returns {string|null}
  */
 export function entryFor (files) {
-  // Anchored at this set's own root, not at "one folder deep". The reader's
-  // rule tolerates exactly one leading folder because BitTorrent always adds
-  // exactly one; applied to paths *before* seeding, that same tolerance accepts
-  // a folder that is not the torrent's. Drop two folders at once and the
-  // publisher saw an entry at `sito/index.html` while the reader, handed
-  // `index/sito/index.html`, saw a list of files — the publisher signing
-  // something nobody would ever check. The two questions have to be the same
-  // question, and this is the half that is asked before the torrent exists.
-  const root = siteRoot(files)
-  return files.map(pathOf).find(path => ENTRY_IN_ROOT(root).test(path)) ?? null
+  return files.map(pathOf).find(path => /^index\.html?$/i.test(path)) ?? null
 }
 
-const ENTRY_IN_ROOT = root =>
-  new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}index\\.html?$`, 'i')
+
 
 /** One spelling of a file's path, used by everything that compares them. */
 export function pathOf (file) {
@@ -224,77 +216,57 @@ export function dropJunk (files) {
 }
 
 /**
- * A set of files as the site it is meant to be.
+ * A set of files as the site it is meant to be, at the paths it will have.
  *
- * One rule, and only one: the entry page is `index.html` in the site's root.
- * When there is no `index.html` there but exactly one page, that page *becomes*
- * `index.html` — because a person who picks `il-mio-post.html` on a phone means
- * it to be the site, and the alternative is telling them to rename a file with
- * tools they do not have.
+ * Two jobs, and the first is the one that matters.
  *
- * This renames a path and nothing else: the bytes are the author's bytes and
- * the File is the same File. The original name is returned for the magnet,
- * though it only survives when the site has more than one file in it — a lone
- * unsigned page is a single-file torrent, and naming one of those renames the
- * file back, which is the thing this was avoiding. Sign it and it gains
- * `spore.pub` and `spore.sig`, so the name lands. Anything more ambiguous than
- * "one page" is left exactly as it is and published as a list of files.
+ * **Every path is made relative to the site's root**, because otherwise
+ * `create-torrent` does it — and it does it to the set it publishes, not to the
+ * set that was signed. It removes one shared top folder, silently, whenever
+ * every file has one. So `spore.sig` described `sito/index.html` while the
+ * torrent contained `index.html`, a reader comparing the two found a file
+ * missing, and the site was reported as having been altered. Every serious
+ * defect on this branch was a version of that sentence.
+ *
+ * Handing over paths that are already root-relative leaves nothing to remove.
+ * It strips repeatedly, because the library takes one level per pass and would
+ * take the next one otherwise, and it stops as soon as some file sits at the
+ * root — which is exactly the condition under which the library does nothing.
+ * The outermost folder becomes the torrent's name, so the link still says what
+ * the author called the thing.
+ *
+ * Second: a lone page becomes `index.html`, whatever it was called, because
+ * somebody who picks `il-mio-post.html` on a phone means it to be the site, and
+ * the alternative is telling them to rename a file with tools they do not have.
+ *
+ * Neither job touches a byte. Both rewrite `fullPath`, which is all
+ * `create-torrent` reads: for one file it takes that path's basename, and for
+ * several it takes the paths entire.
  *
  * @param {File[]} files
  * @returns {{files: File[], renamed: {from: string, to: string}|null, name: string|null}}
  */
 export function asSite (files) {
-  // One file is the site, wherever it was sitting. Less a choice than an
-  // acknowledgement: a single-file torrent has no folder, so create-torrent
-  // names it after the file and discards the directories it came from. Leaving
-  // the path on had the publisher deciding `sito/docs/index.html` was a list of
-  // files, while every reader, handed `index.html`, opened it as the site.
-  if (files.length === 1 && pathOf(files[0]).includes('/')) {
-    files = [flatten(files[0])]
+  let name = null
+  for (let top = sharedTop(files.map(pathOf)); top; top = sharedTop(files.map(pathOf))) {
+    name = name ?? top.slice(0, -1)
+    for (const file of files) file.fullPath = pathOf(file).slice(top.length)
   }
 
-  if (entryFor(files)) return { files, renamed: null, name: null }
+  if (entryFor(files)) return { files, renamed: null, name }
 
-  const prefix = sharedTop(files.map(pathOf))
-  const pages = files.filter(file => {
-    const rest = pathOf(file).slice(prefix.length)
-    return !rest.includes('/') && /\.html?$/i.test(rest)
-  })
-  if (pages.length !== 1) return { files, renamed: null, name: null }
+  const pages = files.filter(file => /^[^/]+\.html?$/i.test(pathOf(file)))
+  if (pages.length !== 1) return { files, renamed: null, name }
 
   const from = pathOf(pages[0])
-  const to = `${prefix}index.html`
-
-  // A new File over the same Blob: the contents are referenced, not copied, so
-  // renaming a film-sized page costs nothing.
-  const renamedFile = new File([pages[0]], 'index.html',
-    { type: pages[0].type, lastModified: pages[0].lastModified })
-  renamedFile.fullPath = to
-
+  pages[0].fullPath = 'index.html'
   return {
-    files: files.map(file => (file === pages[0] ? renamedFile : file)),
-    renamed: { from, to },
-    name: from.slice(from.lastIndexOf('/') + 1).replace(/\.html?$/i, '') || null
+    files,
+    renamed: { from, to: 'index.html' },
+    name: name ?? from.replace(/\.html?$/i, '')
   }
 }
 
-/**
- * The site's root: the one folder every file sits in, or the top of the set.
- *
- * Exported because signing needs the same answer, and the last time these were
- * two separate calculations a correctly signed site read as unsigned.
- */
-export function siteRoot (files) {
-  return sharedTop(files.map(pathOf))
-}
-
-/** The same File under its bare name, its contents referenced rather than copied. */
-function flatten (file) {
-  const name = pathOf(file).split('/').pop()
-  const out = new File([file], name, { type: file.type, lastModified: file.lastModified })
-  out.fullPath = name
-  return out
-}
 
 function sharedTop (paths) {
   const cut = paths[0]?.indexOf('/') ?? -1
