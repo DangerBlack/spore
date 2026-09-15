@@ -88,6 +88,13 @@ Two details to get right rather than assume:
   out is named in a dialog before anything is signed, because dropping files
   from somebody's publication without saying so is the repair this refuses
   everywhere else.
+- **A new signature replaces the old one.** `spore.sig` describes a set of
+  bytes, and a re-publication is not those bytes. Appending beside the existing
+  one put two files at a single path, which is refused — so a site that had ever
+  been signed could not be published again at all, and the folder somebody
+  re-publishes is exactly the one that carries a signature: the one they
+  downloaded, or the one a seeder wrote its version into. This is the round trip
+  Z3 depends on.
 - **Nobody signs over somebody else's declaration.** `spore.pub` is what a
   reader checks a signature against, so writing `spore.sig` with one key beside
   a `spore.pub` naming another produces a mismatch — and a mismatch reads as

@@ -124,7 +124,7 @@ export async function publish (files, name) {
  */
 function nameFor (files) {
   const entry = entryFor(files)
-  const from = entry ?? (files[0].fullPath || files[0].name)
+  const from = entry ?? pathOf(files[0])
   return from.slice(from.lastIndexOf('/') + 1).replace(/\.html?$/i, '') || 'site'
 }
 
@@ -156,7 +156,7 @@ export function checkPublishable (files) {
   // — where every way in passes — rather than in any one of them.
   const seen = new Set()
   for (const file of files) {
-    const path = (file.fullPath || file.name).replace(/\\/g, '/')
+    const path = pathOf(file)
     if (seen.has(path)) throw new Error(`There are two files called ${path}.`)
     seen.add(path)
   }
@@ -172,7 +172,12 @@ export function checkPublishable (files) {
  * @returns {string|null}
  */
 export function entryFor (files) {
-  return chooseEntry(files.map(file => (file.fullPath || file.name).replace(/\\/g, '/')))
+  return chooseEntry(files.map(pathOf))
+}
+
+/** One spelling of a file's path, used by everything that compares them. */
+export function pathOf (file) {
+  return (file.fullPath || file.name).replace(/\\/g, '/')
 }
 
 /**
@@ -190,7 +195,7 @@ export function entryFor (files) {
  * @returns {string} '' for the top of the torrent, otherwise a trailing slash
  */
 export function rootFor (files) {
-  const entry = entryFor(files) ?? (files[0].fullPath || files[0].name)
+  const entry = entryFor(files) ?? pathOf(files[0])
   return entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : ''
 }
 
@@ -228,7 +233,11 @@ export function siteFiles (files) {
   const inside = []
   const outside = []
   for (const file of files) {
-    ;((file.fullPath || file.name).startsWith(root) ? inside : outside).push(file)
+    // Through `pathOf`, because `entryFor` normalises backslashes and this did
+    // not: a name containing one could be chosen as the entry under `dir/` and
+    // then classified as sitting outside it, which is one comparison disagreeing
+    // with itself.
+    ;(pathOf(file).startsWith(root) ? inside : outside).push(file)
   }
   return { files: inside, root, outside }
 }

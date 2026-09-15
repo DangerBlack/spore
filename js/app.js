@@ -13,8 +13,8 @@ import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne }
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
-  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, publish, rootFor,
-  siteFiles
+  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, pathOf, publish,
+  rootFor, siteFiles
 } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
@@ -688,7 +688,20 @@ function noteForeignKey () {
  */
 function backOut () {
   ui.notice.hidden = true
-  if (!current) showWelcome()
+  restoreStage()
+}
+
+/**
+ * Put back whatever the publish attempt covered up.
+ *
+ * `busy()` hides the landing page *and* the file listing, and a listing is not
+ * drawn in the viewer, so nothing else brings it back: for a torrent with no
+ * entry page, "there is still a site open" and "there is still something on
+ * screen" were two different questions, and only the first was being asked.
+ */
+function restoreStage () {
+  if (!current) return showWelcome()
+  if (!findEntry(current.torrent)) showListing(current.torrent)
 }
 
 /**
@@ -700,8 +713,10 @@ function backOut () {
  * site they were on because of a file they dropped by accident.
  */
 function failToPublish (error) {
-  if (!current) return fail(error)
+  if (!current) return fail(new PublishFailed(error))
 
+  // Before the notice, because showing a listing clears it.
+  restoreStage()
   ui.notice.textContent = `That could not be published: ${error.message}`
   ui.notice.className = 'notice notice--error'
   ui.notice.hidden = false
@@ -1905,7 +1920,7 @@ async function seed (files, name) {
   try {
     checkPublishable(files)
   } catch (err) {
-    return fail(err)
+    return failToPublish(err)
   }
 
   // Not a refusal. A set of files with no entry page publishes perfectly well
@@ -1990,7 +2005,7 @@ async function seed (files, name) {
     navigate(magnet)
     if (successor) showSuccessorNote(successor)
   } catch (err) {
-    fail(err)
+    failToPublish(err)
   }
 }
 
@@ -2005,8 +2020,6 @@ async function seed (files, name) {
 function withSporePub (files, site) {
   const identity = me()
   if (!identity) return files
-
-  const pathOf = file => file.fullPath || file.name
 
   // Beside the entry page, which is where readSporePub looks: a key at the root
   // of a torrent does not get to speak for a site in a subdirectory, and a key
@@ -2042,7 +2055,6 @@ async function signContent (files, site) {
   const identity = me()
   if (!identity) return files
 
-  const pathOf = file => file.fullPath || file.name
   const root = rootFor(files)
 
   const described = []
@@ -2063,7 +2075,13 @@ async function signContent (files, site) {
 
   const signature = new File([contents], SIGNATURE_FILE, { type: 'text/plain' })
   signature.fullPath = `${root}${SIGNATURE_FILE}`
-  return [...files, signature]
+
+  // The old one goes. Appending beside it put two files at one path, which is
+  // refused — so a site that had ever been signed could not be published again
+  // at all, and that is exactly the folder somebody re-publishes: the one they
+  // downloaded, or the one a seeder wrote its version of. A signature describes
+  // a set of bytes, and these are not those bytes.
+  return [...files.filter(file => pathOf(file) !== signature.fullPath), signature]
 }
 
 /**
@@ -2293,11 +2311,33 @@ function describe (error) {
       retry: false
     }
   }
+  if (error instanceof PublishFailed) {
+    return {
+      code: ':(',
+      title: 'That could not be published',
+      detail: error.message,
+      retry: false
+    }
+  }
   return {
     code: ':(',
     title: 'This site could not be opened',
     detail: error instanceof Error ? error.message : String(error),
     retry: true
+  }
+}
+
+/**
+ * A failure that happened on the way out rather than on the way in.
+ *
+ * Publishing and reading share an error page, and it used to say "this site
+ * could not be opened" over a refused archive — telling somebody who had just
+ * dropped a file that a site they never asked for had failed to load.
+ */
+class PublishFailed extends Error {
+  constructor (cause) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'PublishFailed'
   }
 }
 

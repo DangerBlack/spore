@@ -908,6 +908,55 @@ async function checkWhatMustNotBeSigned () {
   check('while the key the site declares is left exactly as it was',
     files.some(path => /spore\.pub$/.test(path)), JSON.stringify(files))
 
+  // --- a site that has already been signed once ------------------------------
+  // The folder somebody re-publishes is the one they downloaded, or the one a
+  // seeder wrote its version into, and both carry a spore.sig. Signing appended
+  // a second one beside it, two files landed at one path, and the duplicate
+  // guard refused the whole publish: a site that had ever been signed could
+  // never be published again.
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const beforeAgain = await page.$eval('#share-link', input => input.value)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>again</h1>' },
+    { name: 'spore.sig', type: 'text/plain', text: 'spore-sig/1\nkey=' + 'a'.repeat(64) + '\nsig=b\n' }
+  ])
+  // This tab is signed in already, so the dialog opens at the step that asks
+  // which site this is, not at the one that asks who you are.
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 20_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'again')
+  await page.click('#signin-use-known')
+
+  // Waited for the link to *change*: a share panel left open by the publish
+  // before this one made "published" true before anything had happened, and the
+  // check then read the previous torrent and failed for the wrong reason.
+  let againLink = null
+  let refusedWhy = null
+  try {
+    againLink = await settled(page, beforeAgain)
+  } catch (err) {
+    refusedWhy = err.message
+  }
+  check('a site that was already signed can be published again',
+    Boolean(againLink), refusedWhy ?? '')
+  // The wording matters: a refused publish used to be announced as a site
+  // failing to open, to somebody who had not asked for a site.
+  if (refusedWhy) {
+    check('and a refused publish is described as a publish, not as a failed read',
+      !refusedWhy.includes('could not be opened'), refusedWhy.slice(0, 70))
+  }
+
+  const resigned = againLink === null ? [] : await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    return torrent.files.map(f => f.path)
+  }, againLink)
+  check('and it carries one signature, not the old one and a new one',
+    resigned.filter(path => /spore\.sig$/.test(path)).length === 1, JSON.stringify(resigned))
+
   await page.close()
 }
 
