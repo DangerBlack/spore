@@ -36,9 +36,14 @@ export function findEntry (torrent) {
 /**
  * The same question, asked of paths rather than of a torrent.
  *
- * Publishing needs it too, and it must be the same function: the gate used to
- * insist on one rule when seeding and another when rendering, so it refused to
- * publish sites it could open and signed sites into directories nobody read.
+ * This is the *reader's* half, and it tolerates one leading folder because
+ * BitTorrent wraps every multi-file torrent in exactly one. Publishing asks the
+ * same question of paths that have not been through that yet, where the same
+ * tolerance would accept a folder that is not the torrent's — so `publish.js`
+ * anchors its own version at the set's root instead. Two questions about one
+ * rule, kept honest by a check that publishes every shape of input and compares
+ * the two answers, because every serious defect on this branch was them
+ * disagreeing about a shape nobody had tried.
  *
  * @param {string[]} paths
  * @returns {string|null}
@@ -77,11 +82,15 @@ export async function readSporePub (torrent, entryPath) {
   const file = torrent.files.find(f => normalize(f.path) === `${root}spore.pub`)
   if (!file) return null
 
+  // Before reading, not after. `file.arrayBuffer()` on a torrent file selects
+  // and downloads the whole thing, so a check that runs afterwards has already
+  // let a hostile site make every reader pull down whatever it liked — which is
+  // precisely what this limit is documented as preventing. `length` comes from
+  // the torrent's metadata and costs nothing.
+  if (file.length > MAX_KEY_BYTES) return null
+
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    // A key file is a couple of lines. Anything larger is not one, and is not
-    // worth decoding to find that out. The publisher checks the same number.
-    if (bytes.length > MAX_KEY_BYTES) return null
     const { parseSporePub } = await import('./identity.js')
     return parseSporePub(new TextDecoder().decode(bytes))
   } catch {
@@ -104,13 +113,13 @@ export async function readManifest (torrent, entryPath) {
   const file = torrent.files.find(f => normalize(f.path) === `${root}spore.sig`)
   if (!file) return null
 
+  // Before reading, for the same reason: this file comes out of a stranger's
+  // torrent, and asking for it is what costs. The same number bounds what this
+  // gate will sign, so an honest site can never make one this refuses.
+  if (file.length > MAX_MANIFEST_BYTES) return null
+
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    // A manifest is one line per file, and this is read out of a stranger's
-    // torrent, so something far larger is not one and decoding it to find that
-    // out would be the wrong order of operations. The same number bounds what
-    // this gate will sign, so an honest site can never make one this refuses.
-    if (bytes.length > MAX_MANIFEST_BYTES) return null
     return { contents: new TextDecoder().decode(bytes), root }
   } catch {
     return null

@@ -50,7 +50,11 @@ export function filesFromInput (input) {
   for (const file of files) {
     if (file.webkitRelativePath) file.fullPath = file.webkitRelativePath
   }
-  const name = files[0]?.webkitRelativePath?.split('/')[0] ?? null
+  // `|| null`, not `??`: where `webkitdirectory` degrades to picking single
+  // files — iOS, the device this exists for — `webkitRelativePath` is the empty
+  // string rather than undefined, and `??` kept it. An empty name then beat the
+  // better one `asSite` works out from the page itself.
+  const name = files[0]?.webkitRelativePath?.split('/')[0] || null
   return { files, name }
 }
 
@@ -257,6 +261,15 @@ export function dropJunk (files) {
  * @returns {{files: File[], renamed: {from: string, to: string}|null, name: string|null}}
  */
 export function asSite (files) {
+  // One file is the site, wherever it was sitting. Less a choice than an
+  // acknowledgement: a single-file torrent has no folder, so create-torrent
+  // names it after the file and discards the directories it came from. Leaving
+  // the path on had the publisher deciding `sito/docs/index.html` was a list of
+  // files, while every reader, handed `index.html`, opened it as the site.
+  if (files.length === 1 && pathOf(files[0]).includes('/')) {
+    files = [flatten(files[0])]
+  }
+
   if (entryFor(files)) return { files, renamed: null, name: null }
 
   const prefix = sharedTop(files.map(pathOf))
@@ -290,6 +303,14 @@ export function asSite (files) {
  */
 export function siteRoot (files) {
   return sharedTop(files.map(pathOf))
+}
+
+/** The same File under its bare name, its contents referenced rather than copied. */
+function flatten (file) {
+  const name = pathOf(file).split('/').pop()
+  const out = new File([file], name, { type: file.type, lastModified: file.lastModified })
+  out.fullPath = name
+  return out
 }
 
 function sharedTop (paths) {

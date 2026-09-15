@@ -358,6 +358,7 @@ async function run () {
   await checkSignatureLandsWhereReadersLook()
   await checkAFolderCompressedOnAMac()
   await checkRepublishing()
+  await checkEveryShapeAgrees()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
@@ -1292,6 +1293,61 @@ async function checkAnArchiveTooBigToHold () {
     JSON.stringify(seeded.map(f => `${f.path} ${Math.round(f.length / 1e6)}MB`)))
   check('and the signature covers it',
     seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
+
+  await page.close()
+}
+
+/**
+ * Every shape of input, published for real, and the two answers compared.
+ *
+ * This is the branch's one real hazard written down as a table. The publisher
+ * decides what a site is before a torrent exists; the reader decides after,
+ * from paths BitTorrent has rearranged — it wraps a multi-file torrent in one
+ * folder, strips at most one shared level, and for a single file keeps only the
+ * basename. Every serious defect here was those two answers differing on a
+ * shape nobody had tried, so the shapes are tried.
+ */
+async function checkEveryShapeAgrees () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  const shapes = [
+    ['a folder', ['site/index.html', 'site/a.css'], 'site'],
+    ['a folder holding one file', ['site/index.html'], 'site'],
+    ['a page nested on its own', ['site/docs/index.html'], 'site'],
+    ['a page nested with a sibling', ['site/docs/index.html', 'site/docs/a.css'], 'site'],
+    ['loose files', ['index.html', 'a.css'], null],
+    ['one page', ['post.html'], null],
+    ['one page, nested', ['site/docs/post.html'], null],
+    ['two folders at once', ['site/index.html', 'other/x.txt'], null]
+  ]
+
+  const answers = await page.evaluate(async cases => {
+    const { asSite, entryFor, publish } = await import('/js/publish.js')
+    const { findEntry } = await import('/js/site.js')
+
+    const out = []
+    for (const [label, paths, folder] of cases) {
+      const files = paths.map(path => {
+        const file = new File(['x'], path.split('/').pop(), { type: 'text/html' })
+        file.fullPath = path
+        return file
+      })
+      const site = asSite(files)
+      const publisher = entryFor(site.files)
+      const torrent = await publish(site.files, folder ?? site.name)
+      out.push({ label, publisher, reader: findEntry(torrent) })
+    }
+    return out
+  }, shapes)
+
+  for (const answer of answers) {
+    check(`publisher and reader agree about ${answer.label}`,
+      Boolean(answer.publisher) === Boolean(answer.reader),
+      `${answer.publisher ?? 'a list'} / ${answer.reader ?? 'a list'}`)
+  }
 
   await page.close()
 }
@@ -2280,11 +2336,15 @@ async function checkKeptSiteHearsUpdates () {
   await reader.waitForFunction(
     () => !document.getElementById('viewer').hidden, { timeout: 30_000 })
   await reader.click('#keep-toggle')
-  // Keeping writes the whole torrent to IndexedDB, and this runs in the tenth
-  // or so browser context of the suite with two swarms live in the same
-  // process. It is the one wait here that was actually losing a race: it broke
-  // roughly one run in seven, always at this line, and never reproduced alone.
-  // A slow machine finishing is not a failure, so it is given room.
+  // The suite's one intermittent failure lives here, roughly one run in six,
+  // always this line. Not a timeout: puppeteer reports "Waiting failed" with no
+  // duration, which is a terminated execution context rather than an expired
+  // one — the page goes away underneath the wait. Raising the timeout did not
+  // stop it, which is the evidence for that reading. Keeping writes a whole
+  // torrent to IndexedDB in about the tenth browser context of a run, and
+  // another context is holding a seventy-megabyte film at the same time, so a
+  // renderer under memory pressure is the obvious suspect and is not yet a
+  // demonstrated one. Written down rather than explained away.
   await reader.waitForFunction(
     () => !document.getElementById('kept').hidden, { timeout: 120_000 })
 
