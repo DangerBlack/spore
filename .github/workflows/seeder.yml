@@ -84,6 +84,12 @@ jobs:
           mkdir -p /tmp/site /tmp/data
           echo '<h1>ci</h1>' > /tmp/site/index.html
           echo 'body{}' > /tmp/site/style.css
+          # What a folder looks like after a Mac has opened it. create-torrent
+          # drops these when it walks a directory, whether or not it is asked
+          # to, so signing them produced a manifest describing files the torrent
+          # did not contain — and every reader was told the site was altered.
+          printf 'Bud1' > /tmp/site/.DS_Store
+          printf 'fork' > /tmp/site/._index.html
 
           docker run -d --name smoke \
             -v /tmp/site:/site:ro -v /tmp/data:/data \
@@ -106,5 +112,14 @@ jobs:
           echo "$status" | grep -q '"signed": true' || { echo 'seeder did not sign'; exit 1; }
 
           # And it must have written a manifest, or declaring a key is free again.
-          test -f /tmp/data/versions/*/ci/spore.sig || { echo 'no spore.sig was written'; exit 1; }
+          sig=$(echo /tmp/data/versions/*/ci/spore.sig)
+          test -f "$sig" || { echo 'no spore.sig was written'; exit 1; }
+          cat "$sig"
+
+          # Signing what the torrent will not carry is worse than not signing:
+          # a reader reads the difference as the site having been tampered with.
+          if grep -q 'DS_Store\|\._index' "$sig"; then
+            echo 'signed a file the torrent drops'; exit 1
+          fi
+          grep -q ' index.html$' "$sig" || { echo 'did not sign the page itself'; exit 1; }
           echo 'ok'
