@@ -78,36 +78,42 @@ that, precisely, is what the zip is for.
 
 Two details to get right rather than assume:
 
-- **The site is the entry page's subtree, and nothing else travels with it.**
-  A reader is scoped to that directory — `readSporePub` looks beside the entry
-  and `verifyContent` lists what is under it — so anything at another top level
-  can neither be reached nor checked. Signing it anyway produced a manifest
-  describing files no verifier could see, which reads as *broken*: the site
-  accusing itself of having been altered. This is not an exotic shape. It is
-  what macOS's "Compress" produces, `__MACOSX/` beside the folder. What is left
-  out is named in a dialog before anything is signed, because dropping files
-  from somebody's publication without saying so is the repair this refuses
-  everywhere else.
-- **A new signature replaces the old one.** `spore.sig` describes a set of
-  bytes, and a re-publication is not those bytes. Appending beside the existing
-  one put two files at a single path, which is refused — so a site that had ever
-  been signed could not be published again at all, and the folder somebody
-  re-publishes is exactly the one that carries a signature: the one they
-  downloaded, or the one a seeder wrote its version into. This is the round trip
-  Z3 depends on.
-- **Nobody signs over somebody else's declaration.** `spore.pub` is what a
-  reader checks a signature against, so writing `spore.sig` with one key beside
-  a `spore.pub` naming another produces a mismatch — and a mismatch reads as
-  *broken*, not as "signed by someone else". Republishing another person's site
-  is supported; re-signing it is not, and the publisher is told why. Note what
-  that leaves standing: a folder carrying its author's own `spore.sig` is
-  republished untouched and stays verified under *their* key, which is exactly
-  what a mirror should be. A declaration nobody can parse counts as a
-  declaration for this purpose, since a reader cannot tell it apart from one
-  that simply is not ours. The guard has
-  to be evaluated *after* the signing dialog as well as before it, because that
-  dialog is where an identity usually arrives: a check that only looked first
-  protected the already-signed-in and nobody else.
+- **The site's root is the torrent's root, and the rules live there.**
+  `index.html`, `spore.pub` and `spore.sig` sit directly inside the single
+  folder BitTorrent wraps a torrent in, and nowhere else. A file elsewhere
+  carrying one of those names is not one of those things.
+
+  What was here before *searched*: the shallowest `index.html` anywhere in the
+  tree was the entry, and the site's root was wherever that turned out to be.
+  That flexibility was the single largest source of defects in this branch,
+  because "which directory is the site?" then had an answer that depended on who
+  was asking — and the publisher and the reader asked with different code. A
+  signature went into one directory while readers looked in another; a stray
+  file at a second top level was signed and then reported missing, so the site
+  accused itself of having been altered. Neither can be expressed now.
+
+- **A single page becomes `index.html`.** Somebody who picks `il-mio-post.html`
+  on a phone means it to be the site, and the alternative is telling them to
+  rename a file with tools they do not have. It renames a path, not any bytes;
+  the original name is kept for the magnet, and the publisher is told. Anything
+  more ambiguous than one page is published as the list of files it is.
+
+- **`__MACOSX/` is dropped by name.** It is resource forks rather than content,
+  and macOS writes it beside anything its Compress command touches. Left in, an
+  ordinary Mac archive has two top levels and therefore no `index.html` in its
+  root, so the commonest way of making a zip would produce a list of files
+  instead of a site. One named exception, for the one piece of rubbish common
+  enough to earn it.
+
+- **Republishing has two outcomes and no third.** Either a publication verifies
+  exactly as it arrived — in which case it goes out untouched, still its
+  author's, and hashes to precisely what it hashed before, so the mirror *is*
+  the original — or its key and its signature are thrown away and the publisher
+  signs their own. Everything in between was an attempt to be helpful, and every
+  one of them produced a site that told its readers it had been tampered with.
+  "Did it verify?" is answered by the reader's own functions, which is the whole
+  point: one question, one implementation.
+
 - **A file list cannot be signed, and is not offered the chance.** A reader's
   check reads `spore.pub` and `spore.sig` from beside the entry page, and a
   listing has no entry page, so the gate shows one as "unsigned" whatever it
@@ -115,9 +121,9 @@ Two details to get right rather than assume:
   signature and produce a site that reads as unsigned to everyone including its
   author. The dialog says so instead. Revisit only by defining what verifying a
   listing means, which is a change to the verification story rather than to this.
-- **The publish rule must mirror the read rule exactly**, not approximately.
-  "Would `findEntry` find an entry in this?" is the question, and anything else
-  will diverge the first time one of them is touched. If it would not — two
+- **The publish rule is the read rule**, not a copy of it. `chooseEntry` is one
+  function called from both sides; anything else diverges the first time one of
+  them is touched. If it would not — two
   pages and no index — say so before the signing dialog, listing what was
   picked, and let the author go back or publish it as the file list it is. A
   question, not a refusal: the gate renders such a torrent perfectly well.
@@ -169,9 +175,10 @@ reason to believe the 150 lines stay 150 lines:
   drive letter or a backslash separator. Reject the archive with a plain message
   rather than sanitising quietly: an archive containing one of these is either
   broken or hostile, and neither should be published under a signature.
-- **Decompression bombs.** A running total of uncompressed bytes, with a cap,
-  and a per-entry cap. Streaming means the cap is enforced as it inflates rather
-  than discovered afterwards.
+- **Decompression bombs.** A ratio, refused from the index before anything is
+  inflated, because a ratio is what a bomb is. Sizes are not capped: an archive
+  is never held whole, and a stored entry is handed to the swarm as a slice of
+  the file on disk, so a film costs nothing to publish.
 - **The central directory is authoritative.** Local file headers can disagree
   with it; read the directory at the end of the file and use that, which is also
   what makes the entry list known before a byte is inflated.

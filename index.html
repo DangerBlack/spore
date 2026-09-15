@@ -475,8 +475,8 @@
     <h2>There is no page to open</h2>
   </div>
 
-  <p>Nothing here is named <code>index.html</code>, and there is no single page
-     Spore could open instead, so it cannot tell where a visitor should land.</p>
+  <p>There is no <code>index.html</code> at the top of this, and no single page
+     that could become one, so Spore cannot tell where a visitor should land.</p>
 
   <p>Published as it is, this becomes a <strong>browsable list of files</strong>
      rather than a site: readers see the names below and open them one at a
@@ -489,40 +489,13 @@
      unsigned and can never be offered a newer version: a reader's check reads
      the signature from beside the entry page, and there is no entry page.</p>
 
-  <p class="muted small">To get a page instead: rename the one readers should
-     land on to <code>index.html</code>, or publish only that page.</p>
+  <p class="muted small">To get a page instead: name the one readers should land
+     on <code>index.html</code>, or publish only that page — a single page is
+     published as <code>index.html</code> whatever it is called.</p>
 
   <div class="dialog-actions">
     <button id="no-entry-cancel" type="button" class="link">Go back</button>
     <button id="no-entry-accept" type="button">Publish as a file list</button>
-  </div>
-</dialog>
-
-<!--
-  More than one top level. The common case is not exotic: macOS's own "Compress"
-  puts `__MACOSX/` beside the folder you compressed. Readers are scoped to the
-  entry page's directory, so anything outside it is not part of the site — and
-  signing it anyway produced a manifest listing files a verifier could not see,
-  which reads as tampering rather than as a stray file.
--->
-<dialog id="outside-dialog">
-  <div class="dialog-head">
-    <h2>Some of this is not part of the site</h2>
-  </div>
-
-  <p>The site is <code id="outside-root"></code> and everything under it.
-     These came in the same archive but sit outside it, so they will
-     <strong>not</strong> be published:</p>
-
-  <ul id="outside-files" class="no-entry-files"></ul>
-
-  <p class="muted small">A reader opens the entry page and checks the files
-     beside it. Anything elsewhere cannot be reached, cannot be checked, and
-     signing it would make the site accuse itself of having been altered.</p>
-
-  <div class="dialog-actions">
-    <button id="outside-cancel" type="button" class="link">Go back</button>
-    <button id="outside-accept" type="button">Publish the site</button>
   </div>
 </dialog>
 

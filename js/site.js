@@ -1,18 +1,27 @@
 /**
  * Locating the page to render inside a torrent.
  *
- * A torrent may or may not wrap its files in a root directory, depending on how
- * it was made, and we do not control the ones we merely open. So instead of
- * assuming a layout we look for the shallowest `index.html` and treat its
- * directory as the site root. Relative links inside the page then resolve the
- * same way they would under any static web server, which is the whole contract
- * a published site is held to.
+ * One rule, and it is a rule rather than a search: **the entry page is
+ * `index.html` in the site's root, and nowhere else.** A torrent's root is the
+ * single folder BitTorrent wraps a multi-file torrent in, or the file itself
+ * when there is only one.
+ *
+ * What used to be here looked for the shallowest `index.html` anywhere in the
+ * tree, and that flexibility was the single largest source of defects in this
+ * codebase: "which directory is the site?" then had an answer that depended on
+ * where you asked from, and the publisher and the reader answered it with
+ * different code. A signature was written into one directory while readers
+ * looked in another, and a correctly signed site read as unsigned. There is
+ * nothing to disagree about now.
+ *
+ * A torrent with no `index.html` in its root is not a failure. It is a set of
+ * files, and the gate shows it as one for the reader to browse.
  */
 
 import { TORRENT_PATH } from './config.js'
 
-const INDEX = /(^|\/)index\.html?$/i
-const HTML = /\.html?$/i
+/** `index.html` directly inside the torrent's single root folder, or alone. */
+const ENTRY = /^(?:[^/]+\/)?index\.html?$/i
 
 /**
  * @param {import('webtorrent').Torrent} torrent
@@ -25,24 +34,15 @@ export function findEntry (torrent) {
 /**
  * The same question, asked of paths rather than of a torrent.
  *
- * Publishing needs it too: the gate used to insist on an `index.html` before it
- * would seed anything, while this function was perfectly happy to render a lone
- * page under any other name — so the gate refused to publish sites it could
- * open. One rule, asked in both places, is the only way those two stay honest
- * with each other.
+ * Publishing needs it too, and it must be the same function: the gate used to
+ * insist on one rule when seeding and another when rendering, so it refused to
+ * publish sites it could open and signed sites into directories nobody read.
  *
  * @param {string[]} paths
  * @returns {string|null}
  */
 export function chooseEntry (paths) {
-  const indexes = paths.filter(path => INDEX.test(path))
-  if (indexes.length > 0) return shallowest(indexes)
-
-  // A torrent of a single page, however it was named, is still a site.
-  const pages = paths.filter(path => HTML.test(path))
-  if (pages.length === 1) return pages[0]
-
-  return null
+  return paths.find(path => ENTRY.test(path)) ?? null
 }
 
 /** URL the viewer iframe points at, served by the worker from the swarm. */
@@ -54,18 +54,6 @@ export function entryURL (infoHash, entryPath) {
 /** Torrents made on Windows can carry backslashes; the worker matches on `/`. */
 function normalize (path) {
   return path.replace(/\\/g, '/')
-}
-
-function shallowest (paths) {
-  return paths.reduce((best, path) => {
-    const byDepth = depth(path) - depth(best)
-    if (byDepth !== 0) return byDepth < 0 ? path : best
-    return path.length < best.length ? path : best
-  })
-}
-
-function depth (path) {
-  return path.split('/').length
 }
 
 /**

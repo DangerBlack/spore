@@ -218,6 +218,13 @@ async function readCentralDirectory (blob) {
     entry.path = checkPath(path)
     if (path.endsWith('/')) continue // a directory record holds nothing
 
+    // macOS writes this beside anything its Compress command touches: resource
+    // forks, not content. Named explicitly because it is the one piece of
+    // rubbish common enough to matter — leaving it in gives the archive two top
+    // levels, which means no `index.html` in the root, which means a folder
+    // compressed on a Mac opens as a list of files instead of as a site.
+    if (entry.path === '__MACOSX' || entry.path.startsWith('__MACOSX/')) continue
+
     if (seen.has(entry.path)) {
       throw new ZipError(`That archive contains ${entry.path} twice.`)
     }

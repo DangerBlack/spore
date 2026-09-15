@@ -13,8 +13,8 @@ import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne }
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
-  checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, pathOf, publish,
-  rootFor, siteFiles
+  asSite, checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, pathOf,
+  publish, siteRoot
 } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
@@ -84,11 +84,6 @@ const ui = {
   noEntryFiles: el('no-entry-files'),
   noEntryAccept: el('no-entry-accept'),
   noEntryCancel: el('no-entry-cancel'),
-  outsideDialog: el('outside-dialog'),
-  outsideRoot: el('outside-root'),
-  outsideFiles: el('outside-files'),
-  outsideAccept: el('outside-accept'),
-  outsideCancel: el('outside-cancel'),
   listing: el('listing'),
   listingName: el('listing-name'),
   listingSummary: el('listing-summary'),
@@ -645,59 +640,7 @@ function askAboutSigning (what) {
   })
 }
 
-/**
- * What a set of files already says about who published it.
- *
- * Three answers, not two. "A file called `spore.pub` is here" is not the same
- * question as "a key is declared here", and answering the first while meaning
- * the second let a malformed declaration through: `withSporePub` left the
- * unreadable file alone because the name was taken, signing wrote a signature
- * for this tab's key beside it, and readers — who cannot parse it — saw a site
- * that was unsigned and could never be updated.
- *
- * @returns {Promise<{present: boolean, hex: string|null}>}
- */
-async function declarationIn (files, root) {
-  const existing = files.find(file => pathOf(file) === `${root}spore.pub`)
-  if (!existing) return { present: false, hex: null }
 
-  try {
-    // A key file is a couple of lines. Anything larger is not one, which is how
-    // `readSporePub` treats it too.
-    if (existing.size > 4096) return { present: true, hex: null }
-    return { present: true, hex: parseSporePub(await existing.text()).hex }
-  } catch {
-    return { present: true, hex: null }
-  }
-}
-
-/**
- * Say why this tab did not sign, beside the share link, where it survives.
- *
- * Not in the notice bar: `busy()` overwrites it a moment later and rendering
- * the site clears it, so the one sentence explaining why nobody was asked for a
- * passphrase would appear and vanish. That is the trap `showSuccessorNote`
- * documents, and this is the same way out of it.
- *
- * Two shapes, because there are two truths. A folder carrying its author's own
- * signature is republished **still verified by them** — a faithful mirror,
- * which is the good outcome — and calling that "signed by nobody" was false in
- * the direction that matters: it told a publisher their working mirror was not.
- */
-function noteForeignKey ({ unreadable, kept }) {
-  const whose = unreadable
-    ? 'This folder declares a key that cannot be read'
-    : 'This folder already declares somebody else\u2019s key'
-
-  ui.shareUnsigned.textContent = kept
-    ? `${whose}, and carries the signature that goes with it. Both went out ` +
-      'untouched, so readers check it against that key rather than yours. A ' +
-      'signature from you beside a key that is not yours would read to every ' +
-      'reader as the site having been altered.'
-    : `${whose}, so it went out as it is: published by you, signed by nobody. ` +
-      'Signing it with your key would have made every reader see it as altered.'
-  ui.shareUnsigned.hidden = false
-}
 
 /**
  * Hand the screen back after a publish that did not happen.
@@ -741,33 +684,6 @@ function failToPublish (error) {
   ui.notice.hidden = false
 }
 
-/**
- * Say which files are not part of the site, before any of it is signed.
- *
- * @returns {Promise<boolean>} whether to publish the site without them
- */
-function askAboutFilesOutside (root, outside) {
-  ui.outsideRoot.textContent = root
-  ui.outsideFiles.replaceChildren(...listItems(outside.map(file => file.fullPath || file.name)))
-  ui.outsideDialog.showModal()
-
-  return new Promise(resolve => {
-    const answer = go => { ui.outsideDialog.close(); cleanup(); resolve(go) }
-    const onAccept = () => answer(true)
-    const onCancel = () => answer(false)
-    const onClose = () => { cleanup(); resolve(false) }
-
-    ui.outsideAccept.addEventListener('click', onAccept)
-    ui.outsideCancel.addEventListener('click', onCancel)
-    ui.outsideDialog.addEventListener('close', onClose)
-
-    function cleanup () {
-      ui.outsideAccept.removeEventListener('click', onAccept)
-      ui.outsideCancel.removeEventListener('click', onCancel)
-      ui.outsideDialog.removeEventListener('close', onClose)
-    }
-  })
-}
 
 /** A list of paths, with a tail when there are more than a dialog should show. */
 function listItems (paths, limit = 12) {
@@ -1934,97 +1850,60 @@ async function seed (files, name) {
     return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
   }
 
-  // Checked before the publisher is asked anything. Being asked whether to
-  // sign a folder, and only then told it was empty, is a poor way to find out.
   try {
     checkPublishable(files)
   } catch (err) {
     return failToPublish(err)
   }
 
-  // Not a refusal. A set of files with no entry page publishes perfectly well
-  // and renders as a browsable list, which is occasionally the point — but it
-  // is rarely what someone means by "my site", and this is the last moment
-  // before a magnet exists.
+  // One page picked on a phone becomes the site, because that is what the
+  // person meant. The original name is kept for the magnet.
+  const site = asSite(files)
+  files = site.files
+  name = name ?? site.name
+
   const entry = entryFor(files)
+
+  // Not a refusal. Files with no `index.html` in their root publish perfectly
+  // well and render as a browsable list, which is occasionally the point — but
+  // it is rarely what somebody means by "my site", and this is the last moment
+  // before a magnet exists.
   if (!entry && !await askAboutMissingEntry(files)) {
     backOut()
     return
   }
 
-  // Scoped to the entry's directory, because that is what a reader is scoped
-  // to. An archive with a second top level — `__MACOSX/` beside the folder, for
-  // one — used to have its strays hashed into the signature and then found
-  // missing by every verifier, so an ordinary Mac-made zip published a site
-  // that accused itself of having been altered.
-  const scoped = siteFiles(files)
-  if (scoped.outside.length > 0) {
-    if (!await askAboutFilesOutside(scoped.root, scoped.outside)) {
-      backOut()
-      return
-    }
-    files = scoped.files
-  }
+  // Two outcomes for a publication that arrives already signed, and no third.
+  // Either it verifies exactly as it stands — in which case it is republished
+  // untouched and stays its author's, which is what a mirror is — or its key
+  // and signature are thrown away and the publisher signs their own. Anything
+  // in between produces a site that accuses itself of having been altered.
+  const mirror = entry ? await verifiesAsItStands(files, entry) : false
+  if (!mirror) files = stripSignature(files)
 
-  // Signing is refused over somebody else's declaration. `spore.pub` is what a
-  // reader checks the signature against, so writing `spore.sig` with this tab's
-  // key beside a key that is not this tab's produces a mismatch — and the gate
-  // reads a mismatch as **broken**, meaning "altered", not "signed by someone
-  // else". Republishing another person's site is a supported thing to do; it
-  // simply cannot be signed by the person doing it.
-  const declaration = await declarationIn(files, scoped.root)
+  const decision = entry && !mirror
+    ? await askAboutSigning(name)
+    : { sign: false, site: null }
 
-  // A function rather than a value, because the signing dialog is where an
-  // identity usually arrives. Read once, before it, this answered for a
-  // publisher who was already signed in and left out everybody publishing for
-  // the first time — which is nearly everybody.
-  const cannotSign = () => declaration.present && Boolean(me()) && declaration.hex !== me().hex
-
-  // Two cases where the question is not worth asking, and one where it is.
-  //
-  // A file list has no entry page, so no reader ever reads a signature for it:
-  // the gate shows such a torrent as "unsigned" whatever it holds, and asking
-  // would take a passphrase to write something nobody checks. A folder already
-  // declaring a key this tab does not hold cannot be signed either, for the
-  // reason above. Otherwise the question is asked here — before anything is
-  // hashed and before `busy()`, which hides the landing page and with it the
-  // drop zone, so a dialog raised any later would have nothing to return to.
-  const asked = Boolean(entry) && !cannotSign()
-  const decision = asked ? await askAboutSigning(name) : { sign: false, site: null }
   if (!decision) {
-    // Backing out must hand the screen back. The picker path hides the landing
-    // page — which is also the drop zone — before this question is asked, and
-    // leaving it hidden is the same shape as the bug that once made signing in
-    // the end of publishing. A site that was already open is left alone: it was
-    // not this publish's to close.
     backOut()
     return
   }
 
-  // Said in both shapes, because there are two ways to decline and only silence
-  // is wrong: skipped before the question, or withdrawn after it. Somebody who
-  // chose "publish unsigned" for themselves is told nothing, having decided.
-  const declined = Boolean(entry) && cannotSign() && (!asked || decision.sign)
-  const sign = decision.sign && !declined
-
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {
-    const signed = sign
+    const signed = decision.sign
       ? await signContent(withSporePub(files, decision.site), decision.site)
       : files
+
     const torrent = await publish(signed, name)
     const magnet = magnetFor(torrent.infoHash, torrent.name)
     showShareLink(magnet)
-    if (declined) {
-      noteForeignKey({
-        unreadable: declaration.hex === null,
-        kept: files.some(file => pathOf(file) === `${rootFor(files)}${SIGNATURE_FILE}`)
-      })
-    }
+    noteWhatChanged({ renamed: site.renamed, mirror })
 
     // Announced before navigating: navigating replaces the site on screen, and
     // this has to happen whether or not the reader stays to watch it.
-    const successor = sign ? await announceSuccessor(torrent, decision.site) : null
+    const successor = decision.sign ? await announceSuccessor(torrent, decision.site) : null
 
     navigate(magnet)
     if (successor) showSuccessorNote(successor)
@@ -2034,32 +1913,107 @@ async function seed (files, name) {
 }
 
 /**
- * Put the signed-in key in the folder, so the site names its own author.
+ * Does this publication already verify, exactly as it arrived?
  *
- * A folder that already carries a `spore.pub` is left exactly as it is. The
- * publisher may be re-publishing someone else's site, or deliberately shipping
- * a key other than the one in this tab, and silently overwriting it would
- * change who the site says it belongs to without saying so.
+ * Asked with the reader's own functions, deliberately. Every serious defect on
+ * this branch came from the publisher and the reader answering one question
+ * with two pieces of code; this is the same question, and there is one answer
+ * because there is one implementation.
+ */
+async function verifiesAsItStands (files, entry) {
+  const root = siteRoot(files)
+  const at = path => files.find(file => pathOf(file) === `${root}${path}`)
+
+  const pub = at('spore.pub')
+  const sig = at(SIGNATURE_FILE)
+  if (!pub || !sig) return false
+
+  try {
+    const key = parseSporePub(await pub.text())
+    const result = await verifyManifest(await sig.text(), key.hex)
+    if (!result.ok) return false
+
+    const present = files
+      .map(file => pathOf(file))
+      .filter(path => path.startsWith(root))
+      .map(path => path.slice(root.length))
+
+    if (missingFrom(result.manifest, present).length > 0) return false
+    if (unlistedIn(result.manifest, present).length > 0) return false
+
+    for (const file of files) {
+      const path = pathOf(file)
+      if (!path.startsWith(root)) continue
+
+      const relative = path.slice(root.length)
+      if (relative === SIGNATURE_FILE) continue
+      if (!(await checkFile(result.manifest, relative,
+        new Uint8Array(await file.arrayBuffer()))).ok) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Say what the gate did to the files, beside the share link where it survives.
+ *
+ * Renaming a page and republishing somebody else's signature are both things
+ * the publisher did not ask for and would be entitled to be surprised by, and
+ * the notice bar is not the place: `busy()` overwrites it and rendering the
+ * site clears it, so a sentence put there appears and vanishes.
+ */
+function noteWhatChanged ({ renamed, mirror }) {
+  const said = []
+  if (renamed) {
+    said.push(`${renamed.from} was published as index.html, so that it opens ` +
+      'as the site rather than as a list with one file in it.')
+  }
+  if (mirror) {
+    said.push('This was already signed, and it still verifies, so it went out ' +
+      'exactly as it arrived — still its author\u2019s, not yours.')
+  }
+
+  ui.shareUnsigned.textContent = said.join(' ')
+  ui.shareUnsigned.hidden = said.length === 0
+}
+
+
+/**
+ * Put the signed-in key in the site's root, so the site names its own author.
+ *
+ * Nothing is left in place here. Anything the incoming files called `spore.pub`
+ * has already been thrown away by `stripSignature` unless it was part of a
+ * publication that verified as it stood, and a publication that verified was
+ * never handed to this function. So there is one key, it is this tab's, and it
+ * sits where every reader looks.
  */
 function withSporePub (files, site) {
   const identity = me()
   if (!identity) return files
 
-  // Beside the entry page, which is where readSporePub looks: a key at the root
-  // of a torrent does not get to speak for a site in a subdirectory, and a key
-  // in a subdirectory does not get to speak for the page readers open.
-  const root = rootFor(files)
-
-  // Scoped to that root, and not to the whole set. A `spore.pub` somewhere else
-  // in the archive used to count as "this site already declares a key", so none
-  // was written beside the entry — and the site went out signed by a key no
-  // reader would ever find.
-  if (files.some(file => pathOf(file) === `${root}spore.pub`)) return files
-
   const contents = formatSporePub(identity.hex, publicNameFor(identity.hex), site)
   const file = new File([contents], 'spore.pub', { type: 'text/plain' })
-  file.fullPath = `${root}spore.pub`
+  file.fullPath = `${siteRoot(files)}spore.pub`
   return [...files, file]
+}
+
+/**
+ * Throw away a signature that is not going to be honoured.
+ *
+ * A signature belongs to a set of bytes, and these are about to stop being
+ * those bytes. Keeping somebody else's `spore.pub` while signing with this
+ * tab's key produces a site that reads as **altered** to every reader, and
+ * keeping a `spore.sig` that no longer matches produces the same thing. There
+ * are two outcomes for republishing and this is the second one: either a
+ * publication verifies exactly as it stands and is not touched at all, or its
+ * key and its signature go and the publisher's own take their place.
+ */
+function stripSignature (files) {
+  const root = siteRoot(files)
+  return files.filter(file =>
+    pathOf(file) !== `${root}spore.pub` && pathOf(file) !== `${root}${SIGNATURE_FILE}`)
 }
 
 /**
@@ -2079,14 +2033,14 @@ async function signContent (files, site) {
   const identity = me()
   if (!identity) return files
 
-  const root = rootFor(files)
+  const root = siteRoot(files)
 
   const described = []
   for (const file of files) {
     const full = pathOf(file)
-    // Outside the root is outside the site. `verifyContent` lists what is under
-    // the root and nothing else, so a manifest reaching further describes files
-    // the reader cannot see and the site reads as broken rather than unsigned.
+    // Everything is under the root now — that is what a site is — but the check
+    // stays, because a manifest describing a file the reader cannot see is read
+    // as tampering rather than as a stray.
     if (!full.startsWith(root)) continue
     const path = full.slice(root.length)
     if (path === SIGNATURE_FILE) continue
