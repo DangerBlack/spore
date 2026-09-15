@@ -13,8 +13,8 @@ import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne }
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
-  asSite, checkPublishable, entryFor, filesFromDrop, filesFromInput, filesFromPicker, pathOf,
-  publish, siteRoot
+  asSite, checkPublishable, dropJunk, entryFor, filesFromDrop, filesFromInput, filesFromPicker,
+  pathOf, publish, siteRoot
 } from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
@@ -1856,8 +1856,14 @@ async function seed (files, name) {
     return failToPublish(err)
   }
 
+  // Whatever an operating system left in the folder goes first, and goes here
+  // rather than inside the torrent library, so that the files being signed and
+  // the files being seeded are the same files.
+  const cleaned = dropJunk(files)
+  files = cleaned.files
+
   // One page picked on a phone becomes the site, because that is what the
-  // person meant. The original name is kept for the magnet.
+  // person meant.
   const site = asSite(files)
   files = site.files
   name = name ?? site.name
@@ -1879,6 +1885,7 @@ async function seed (files, name) {
   // and signature are thrown away and the publisher signs their own. Anything
   // in between produces a site that accuses itself of having been altered.
   const mirror = entry ? await verifiesAsItStands(files, entry) : false
+  const hadKey = !mirror && files.some(file => pathOf(file) === `${siteRoot(files)}spore.pub`)
   if (!mirror) files = stripSignature(files)
 
   const decision = entry && !mirror
@@ -1899,7 +1906,12 @@ async function seed (files, name) {
     const torrent = await publish(signed, name)
     const magnet = magnetFor(torrent.infoHash, torrent.name)
     showShareLink(magnet)
-    noteWhatChanged({ renamed: site.renamed, mirror })
+    noteWhatChanged({
+      renamed: site.renamed,
+      mirror,
+      dropped: cleaned.dropped,
+      discarded: hadKey && !decision.sign
+    })
 
     // Announced before navigating: navigating replaces the site on screen, and
     // this has to happen whether or not the reader stays to watch it.
@@ -1964,15 +1976,29 @@ async function verifiesAsItStands (files, entry) {
  * the notice bar is not the place: `busy()` overwrites it and rendering the
  * site clears it, so a sentence put there appears and vanishes.
  */
-function noteWhatChanged ({ renamed, mirror }) {
+function noteWhatChanged ({ renamed, mirror, dropped, discarded }) {
   const said = []
+
   if (renamed) {
     said.push(`${renamed.from} was published as index.html, so that it opens ` +
       'as the site rather than as a list with one file in it.')
   }
+  if (dropped.length > 0) {
+    said.push(`${dropped.join(', ')} ${dropped.length === 1 ? 'was' : 'were'} left ` +
+      'out: files an operating system writes into a folder, which are not part ' +
+      'of the site and cannot be signed as if they were.')
+  }
   if (mirror) {
-    said.push('This was already signed, and it still verifies, so it went out ' +
-      'exactly as it arrived — still its author\u2019s, not yours.')
+    // Deliberately not "byte for byte": the files are untouched, but a
+    // torrent's name is part of its infohash and does not survive being picked
+    // out of one swarm and handed back through a file picker.
+    said.push('This was already signed, and it still verifies, so its files ' +
+      'went out untouched \u2014 still its author\u2019s, not yours.')
+  }
+  if (discarded) {
+    said.push('It arrived declaring a key, without a signature that stands up ' +
+      'to checking, so the key was left out rather than published as a claim ' +
+      'nobody can verify.')
   }
 
   ui.shareUnsigned.textContent = said.join(' ')

@@ -108,9 +108,11 @@ function looksLikeZip (file) {
  */
 export async function publish (files, name) {
   checkPublishable(files)
-  if (files.length === 1) return await seedTorrent(files, {})
+  // `filterJunkFiles: false` because `dropJunk` has already done it, and two
+  // filters that disagree by one file produce a site that accuses itself.
+  if (files.length === 1) return await seedTorrent(files, { filterJunkFiles: false })
 
-  return await seedTorrent(files, { name: name ?? nameFor(files) })
+  return await seedTorrent(files, { name: name ?? nameFor(files), filterJunkFiles: false })
 }
 
 /**
@@ -118,8 +120,12 @@ export async function publish (files, name) {
  *
  * A picker reports no folder, so loose files have no name to inherit, and
  * leaving it to WebTorrent names the torrent after whichever file came first —
- * `post.html/post.html`, which is not wrong so much as embarrassing. The entry
- * page is the closest thing to a title these files have.
+ * `post.html/post.html`, which is not wrong so much as embarrassing.
+ *
+ * It is a poor title and worth saying so: by the time this is reached the entry
+ * is `index.html`, so files picked with an `index.html` already among them get
+ * a torrent called `index`. `asSite` supplies a better one whenever it renamed
+ * something, which is the case where a person actually chose a name.
  */
 function nameFor (files) {
   const entry = entryFor(files)
@@ -192,6 +198,45 @@ export function pathOf (file) {
 }
 
 /**
+ * Files an operating system left behind, which are not part of anybody's site.
+ *
+ * This list is `create-torrent`'s, copied deliberately rather than imported,
+ * and the torrent is built with its own filtering turned **off** so that this
+ * is the only place it happens. That matters more than it sounds: the library
+ * used to drop these silently *after* `spore.sig` had already hashed them, so
+ * the manifest described a file the torrent did not contain and every reader —
+ * including the author — was told the site had been altered. A `.DS_Store` sits
+ * in essentially every folder the Finder has ever opened.
+ *
+ * Two filters that are nearly the same are worse than either one alone: too
+ * broad and the torrent carries a file the signature never covered, too narrow
+ * and the signature covers a file the torrent never carried. Both read as
+ * tampering. So there is one, it is here, and `seedTorrent` is told not to have
+ * an opinion.
+ */
+const JUNK = new RegExp([
+  '^npm-debug\\.log$', '^\\..*\\.swp$',
+  '^\\.DS_Store$', '^\\.AppleDouble$', '^\\.LSOverride$', '^Icon\\r$', '^\\._.*',
+  '^\\.Spotlight-V100(?:$|\\/)', '\\.Trashes', '^__MACOSX$',
+  '~$', '^Thumbs\\.db$', '^ehthumbs\\.db$', '^[Dd]esktop\\.ini$', '@eaDir$'
+].join('|'))
+
+/** @param {File[]} files @returns {{files: File[], dropped: string[]}} */
+export function dropJunk (files) {
+  const junk = file => {
+    const name = pathOf(file).split('/').pop()
+    // Both halves, exactly as create-torrent has it: a leading dot *and* a
+    // match. `Thumbs.db` is in the list and is not dropped, because it has no
+    // leading dot; matching only one half would put the two filters at odds.
+    return name.startsWith('.') && JUNK.test(name)
+  }
+  return {
+    files: files.filter(file => !junk(file)),
+    dropped: files.filter(junk).map(pathOf)
+  }
+}
+
+/**
  * A set of files as the site it is meant to be.
  *
  * One rule, and only one: the entry page is `index.html` in the site's root.
@@ -200,10 +245,13 @@ export function pathOf (file) {
  * it to be the site, and the alternative is telling them to rename a file with
  * tools they do not have.
  *
- * This renames a path and nothing else. The bytes are the author's bytes, the
- * File is the same File, and the original name is kept for the magnet so the
- * link still says what the thing is called. Anything more ambiguous than "one
- * page" is left exactly as it is and published as a browsable list of files.
+ * This renames a path and nothing else: the bytes are the author's bytes and
+ * the File is the same File. The original name is returned for the magnet,
+ * though it only survives when the site has more than one file in it — a lone
+ * unsigned page is a single-file torrent, and naming one of those renames the
+ * file back, which is the thing this was avoiding. Sign it and it gains
+ * `spore.pub` and `spore.sig`, so the name lands. Anything more ambiguous than
+ * "one page" is left exactly as it is and published as a list of files.
  *
  * @param {File[]} files
  * @returns {{files: File[], renamed: {from: string, to: string}|null, name: string|null}}

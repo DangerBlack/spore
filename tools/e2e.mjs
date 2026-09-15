@@ -964,13 +964,52 @@ async function checkRepublishing () {
 
   check('a publication that still verifies is republished without being asked about',
     !untouched.asked, String(untouched.asked))
-  check('and it hashes to exactly what it hashed before, so the mirror is the original',
+  // Identical here because both publishes reach the torrent by the same route
+  // and so compute the same torrent name, which is part of the infohash. The
+  // files are what is guaranteed untouched; the hash follows only when the name
+  // does too.
+  check('and its files are untouched, so by this route it hashes the same',
     untouched.link === mirrored, `${untouched.link.slice(-20)} vs ${mirrored.slice(-20)}`)
   check('and it keeps the key it arrived with, rather than the publisher\u2019s',
     untouched.key.split('\n')[0] === declared.key.split('\n')[0],
     untouched.key.split('\n')[0].slice(0, 20))
   check('and the publisher is told it stayed its author\u2019s',
     untouched.said.includes('still its author'), untouched.said.slice(0, 60))
+
+  // --- a folder the Finder has touched ---------------------------------------
+  // `.DS_Store` sits in essentially every folder macOS has ever opened, and
+  // create-torrent drops it silently — after `spore.sig` has already hashed it.
+  // The manifest then described a file the torrent did not contain, and every
+  // reader, the author included, was told the site had been altered.
+  const withJunk = await page.$eval('#share-link', input => input.value)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>touched by finder</h1>' },
+    { name: '.DS_Store', type: 'application/octet-stream', text: 'Bud1\u0000junk' }
+  ])
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 20_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'finder')
+  await page.click('#signin-use-known')
+
+  const tidied = await settled(page, withJunk)
+  const kept = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    return torrent.files.map(f => f.path)
+  }, tidied)
+  check('a folder the Finder has touched publishes without its leftovers',
+    !kept.some(path => path.includes('.DS_Store')), JSON.stringify(kept))
+
+  await page.waitForFunction(
+    () => !document.getElementById('author').hidden, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => document.getElementById('author').dataset.state !== 'checking', { timeout: 30_000 })
+  check('and it reads as verified rather than as tampered with',
+    await page.$eval('#author', el => el.dataset.state) === 'verified',
+    await page.$eval('#author', el => el.dataset.state))
+  check('and the publisher is told what was left out',
+    (await page.$eval('#share-unsigned', el => el.hidden ? '' : el.textContent)).includes('.DS_Store'))
 
   // --- a site that has already been signed once ------------------------------
   // The folder somebody re-publishes is the one they downloaded, or the one a
@@ -2112,8 +2151,13 @@ async function checkKeptSiteHearsUpdates () {
   await reader.waitForFunction(
     () => !document.getElementById('viewer').hidden, { timeout: 30_000 })
   await reader.click('#keep-toggle')
+  // Keeping writes the whole torrent to IndexedDB, and this runs in the tenth
+  // or so browser context of the suite with two swarms live in the same
+  // process. It is the one wait here that was actually losing a race: it broke
+  // roughly one run in seven, always at this line, and never reproduced alone.
+  // A slow machine finishing is not a failure, so it is given room.
   await reader.waitForFunction(
-    () => !document.getElementById('kept').hidden, { timeout: 40_000 })
+    () => !document.getElementById('kept').hidden, { timeout: 120_000 })
 
   // Then throws the live torrent away, so reopening has to come off disk. That
   // is a reader coming back tomorrow, which is the case that was broken.

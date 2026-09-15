@@ -147,9 +147,13 @@ deeper down. A single page is published as `index.html` whatever you called it,
 and `__MACOSX/` is dropped, so a folder compressed on a Mac opens as a site.
 
 Republishing somebody else's site has two outcomes and no third: if it still
-verifies exactly as it arrived it goes out untouched and stays theirs — the
-mirror hashes to what the original hashed — and otherwise its key and signature
-are thrown away and you sign your own.
+verifies exactly as it arrived its files go out untouched and it stays theirs,
+and otherwise its key and signature are thrown away and you sign your own.
+
+Files an operating system leaves in a folder — `.DS_Store`, `__MACOSX/`,
+`._` thumbnails — are left out, and you are told which. They are not part of
+anybody's site, and signing them produces a site that reports itself as
+altered.
 
 The files are hashed in your browser and never sent to a server. You get
 a magnet and a shareable link, and your tab becomes the site's first seed.
