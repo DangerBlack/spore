@@ -87,6 +87,50 @@ export function manifestWouldExceed (paths) {
   return bytes > MAX_MANIFEST_BYTES
 }
 
+/**
+ * Files an operating system leaves in a folder, which are not part of a site.
+ *
+ * This lives here because this module owns the question "what does a signature
+ * cover", and the answer has to be the same everywhere: the gate, the seeder,
+ * and `create-torrent`, which drops these on its own and cannot be told not to
+ * when it is handed a directory. Two rules that differ by one file produce a
+ * manifest describing something the torrent does not contain, and a reader
+ * reads that as tampering rather than as a stray — so the list is copied from
+ * `create-torrent` deliberately, and a check compares the two against the real
+ * library rather than trusting the copy.
+ *
+ * Both halves matter: a leading dot *and* a match. `Thumbs.db` is on the list
+ * and is not junk by this rule, because it has no leading dot.
+ */
+const JUNK = new RegExp([
+  '^npm-debug\\.log$', '^\\..*\\.swp$',
+  '^\\.DS_Store$', '^\\.AppleDouble$', '^\\.LSOverride$', '^Icon\\r$', '^\\._.*',
+  '^\\.Spotlight-V100(?:$|\\/)', '\\.Trashes', '^__MACOSX$',
+  '~$', '^Thumbs\\.db$', '^ehthumbs\\.db$', '^[Dd]esktop\\.ini$', '@eaDir$'
+].join('|'))
+
+/**
+ * Two rules, because `create-torrent` has two and applies them to two kinds of
+ * input. Handed a *list of files* it drops a name that begins with a dot and
+ * matches the list. Handed a *directory* it walks it, dropping every hidden
+ * entry and every name on the list whether or not it begins with a dot — and
+ * that one cannot be turned off, since `filterJunkFiles` only reaches the list.
+ *
+ * The gate hands over a list; the seeder hands over a directory. Naming both
+ * here, beside each other, is the only way the difference stays visible.
+ */
+
+/** What is dropped from a list of files: a dot *and* a match. */
+export function isJunkPath (path) {
+  const name = path.split('/').pop()
+  return name.startsWith('.') && JUNK.test(name)
+}
+
+/** What is dropped while walking a directory: hidden, *or* a match. */
+export function skippedWhenWalking (name) {
+  return name.startsWith('.') || JUNK.test(name)
+}
+
 /** Files that describe the signature rather than being covered by it. */
 const EXCLUDED = new Set([SIGNATURE_FILE])
 

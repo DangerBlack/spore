@@ -1869,6 +1869,11 @@ async function seed (files, name) {
     // The notice bar, not the error page: there is a dialog open, and replacing
     // the page underneath it would be answering a transient collision by
     // destroying what the person is in the middle of.
+    // The stage first: the picker calls `busy()` before it gets here, which
+    // hides the landing page, the listing and the error page alike. Saying "one
+    // is already on its way" over a blank screen is not an improvement on
+    // saying nothing.
+    restoreStage()
     ui.notice.textContent =
       'One publication is already on its way. Finish or cancel that one first.'
     ui.notice.className = 'notice notice--error'
@@ -1940,7 +1945,14 @@ async function publishOne (files, name) {
   // the reader opened normally. Recomputing a root is how these two came apart
   // every previous time.
   const root = siteRoot(files)
+
+  // Said out loud, because this reads and hashes every file: republishing a
+  // large folder sat on an idle landing page for as long as it took, with
+  // nothing to show the click had done anything. Every other slow step here
+  // announces itself.
+  if (entry) busy('Checking the signature it came with…')
   const mirror = entry ? await verifiesAsItStands(files, root) : false
+  if (entry && !mirror) ui.notice.hidden = true
   const hadKey = !mirror && files.some(file => pathOf(file) === `${root}spore.pub`)
   if (!mirror) files = stripSignature(files, root)
 
@@ -1974,6 +1986,7 @@ async function publishOne (files, name) {
       mirror,
       dropped: cleaned.dropped,
       discarded: hadKey && !decision.sign,
+      replaced: hadKey && decision.sign,
       tooBigToSign: tooBigToSign && Boolean(entry)
     })
 
@@ -2056,7 +2069,7 @@ async function verifiesAsItStands (files, root) {
  * the notice bar is not the place: `busy()` overwrites it and rendering the
  * site clears it, so a sentence put there appears and vanishes.
  */
-function noteWhatChanged ({ renamed, mirror, dropped, discarded, tooBigToSign }) {
+function noteWhatChanged ({ renamed, mirror, dropped, discarded, replaced, tooBigToSign }) {
   const said = []
 
   if (renamed) {
@@ -2074,6 +2087,11 @@ function noteWhatChanged ({ renamed, mirror, dropped, discarded, tooBigToSign })
     // out of one swarm and handed back through a file picker.
     said.push('This was already signed, and it still verifies, so its files ' +
       'went out untouched \u2014 still its author\u2019s, not yours.')
+  }
+  if (replaced) {
+    said.push('It arrived declaring somebody else\u2019s key, without a signature ' +
+      'that stands up to checking, so that key was replaced by yours. It is ' +
+      'published as your work, not theirs.')
   }
   if (discarded) {
     said.push('It arrived declaring a key, without a signature that stands up ' +

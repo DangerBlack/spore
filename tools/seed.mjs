@@ -57,7 +57,9 @@ import { DEFAULT_TRACKERS } from '../js/config.js'
 import { formatSporePub, identityFromPassphrase, fingerprint, saltFor, normalizeSite }
   from '../js/identity.js'
 import { signUpdate } from '../js/record.js'
-import { SIGNATURE_FILE, manifestEntries, signManifest } from '../js/manifest.js'
+import {
+  SIGNATURE_FILE, manifestEntries, signManifest, skippedWhenWalking
+} from '../js/manifest.js'
 import { watchForUpdates } from '../js/updates.js'
 
 /* -------------------------------------------------------------------------- */
@@ -416,11 +418,21 @@ async function signContent (dir) {
   const files = []
   const walk = async current => {
     for (const entry of await readdir(current, { withFileTypes: true })) {
+      // Exactly what create-torrent skips while walking this same directory:
+      // every hidden entry and every name on the junk list, directories
+      // included. It does this whether or not it is asked to — `filterJunkFiles`
+      // only reaches a list of files, never a path — so hashing one of these
+      // here put a file in the signature that was never in the torrent, and
+      // every reader was told the site had been altered. Any directory that has
+      // been opened in the Finder has a `.DS_Store` in it.
+      if (skippedWhenWalking(entry.name)) continue
+
       const full = join(current, entry.name)
       if (entry.isDirectory()) await walk(full)
       else if (entry.isFile()) {
         const path = relative(dir, full).split(sep).join('/')
         if (path === SIGNATURE_FILE) continue
+
         files.push({ path, bytes: new Uint8Array(await readFile(full)) })
       }
     }

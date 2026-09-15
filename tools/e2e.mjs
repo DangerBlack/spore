@@ -62,7 +62,8 @@ const REFUSED_ARCHIVES = [
   { name: 'ZIP64', file: 'zip64.zip', because: 'zip64 format', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAD/////AAA=' },
   { name: 'DRIVE_LETTER', file: 'drive-letter.zip', because: 'names a drive', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAANAAAAQzovaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAADQAAAAAAAAAAAAAAgAEAAAAAQzovaW5kZXguaHRtbFBLBQYAAAAAAQABADsAAAA1AAAAAAA=' },
   { name: 'EXPANSION_BOMB', file: 'expansion-bomb.zip', because: 'expand more than 2000-fold', base64: 'UEsDBBQAAAAIAARxL12PXQ5eBgAAAGQAAAAKAAAAaW5kZXguaHRtbKuooD0AAFBLAQIUAxQAAAAIAARxL12PXQ5eBgAAAAAoa+4KAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAAC4AAAAAAA==' },
-  { name: 'TOO_MUCH_TO_HOLD', file: 'too-much-to-hold.zip', because: 'more than 256 MB of compressed files', base64: 'UEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDAuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDEuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDIuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDMuaHRtbGNgGAWjYBQMdwAAUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABAAAAAHAwLmh0bWxQSwECFAMUAAAACAAEcS9dgBcLBkBCDwCASl0FBwAAAAAAAAAAAAAAgAEwAAAAcDEuaHRtbFBLAQIUAxQAAAAIAARxL12AFwsGQEIPAIBKXQUHAAAAAAAAAAAAAACAAWAAAABwMi5odG1sUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABkAAAAHAzLmh0bWxQSwUGAAAAAAQABADUAAAAwAAAAAAA' }
+  { name: 'TOO_MUCH_TO_HOLD', file: 'too-much-to-hold.zip', because: 'more than 256 MB of compressed files', base64: 'UEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDAuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDEuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDIuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDMuaHRtbGNgGAWjYBQMdwAAUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABAAAAAHAwLmh0bWxQSwECFAMUAAAACAAEcS9dgBcLBkBCDwCASl0FBwAAAAAAAAAAAAAAgAEwAAAAcDEuaHRtbFBLAQIUAxQAAAAIAARxL12AFwsGQEIPAIBKXQUHAAAAAAAAAAAAAACAAWAAAABwMi5odG1sUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABkAAAAHAzLmh0bWxQSwUGAAAAAAQABADUAAAAwAAAAAAA' },
+  { name: 'PREFIXED', file: 'prefixed.zip', because: 'something in front of its index', base64: 'TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQSwMEFAAAAAgAUZwvXVJBzP0KAAAACgAAAAoAAABpbmRleC5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFGcL11SQcz9CgAAAAoAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAADIAAAAAAA==' }
 ]
 
 /**
@@ -359,6 +360,7 @@ async function run () {
   await checkAFolderCompressedOnAMac()
   await checkRepublishing()
   await checkEveryShapeAgrees()
+  await checkJunkRulesMatchTheLibrary()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
@@ -1350,6 +1352,74 @@ async function checkEveryShapeAgrees () {
   }
 
   await page.close()
+}
+
+/**
+ * Our two ideas of a junk file, against the library's two, on real input.
+ *
+ * `create-torrent` has two rules and applies them to two kinds of input. Handed
+ * a *list of files* it drops names that begin with a dot and match its list.
+ * Handed a *directory* it walks it, dropping every hidden entry and every name
+ * on the list whether or not it begins with a dot — and that one cannot be
+ * turned off, because `filterJunkFiles` never reaches a path.
+ *
+ * The gate hands over a list and the seeder hands over a directory, so both
+ * rules are copied and both have to be exact. Too broad and the torrent carries
+ * a file the signature never covered; too narrow and the signature covers a
+ * file the torrent never carried. Both read to a reader as tampering.
+ *
+ * Checked against the library itself rather than against the list it was copied
+ * from, because a copy verified only against its own origin is not verified.
+ */
+async function checkJunkRulesMatchTheLibrary () {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const createTorrent = (await import('create-torrent')).default
+  const { isJunkPath, skippedWhenWalking } =
+    await import(`file://${process.cwd()}/js/manifest.js`)
+
+  const names = [
+    'index.html', 'photo.jpg', '.DS_Store', '._preview.jpg', '.gitignore',
+    'Thumbs.db', '.hidden', 'npm-debug.log', '.swap.swp', 'desktop.ini'
+  ]
+  const build = opts => new Promise((resolve, reject) =>
+    createTorrent(opts.input, opts.options ?? {}, (err, buf) => err ? reject(err) : resolve(buf)))
+
+  // --- the rule for a directory, which is the seeder's ------------------------
+  const dir = await mkdtemp(join(tmpdir(), 'spore-junk-'))
+  try {
+    for (const name of names) await writeFile(join(dir, name), 'x')
+    const walked = new Set((await parseTorrentFile(await build({ input: dir })))
+      .files.map(file => file.path.split('/').slice(1).join('/')))
+
+    const wrong = names.filter(name => skippedWhenWalking(name) === walked.has(name))
+    check('the seeder skips exactly what the library skips walking a directory',
+      wrong.length === 0, wrong.length ? `disagreed about ${wrong.join(', ')}` : `${names.length} names`)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  // --- and the rule for a list of files, which is the gate's -------------------
+  const listed = names.map(name => {
+    const buffer = Buffer.from('x')
+    buffer.name = name
+    buffer.fullPath = `site/${name}`
+    return buffer
+  })
+  const inTorrent = new Set((await parseTorrentFile(await build({
+    input: listed, options: { name: 'site' }
+  }))).files.map(file => file.path.split('/').slice(1).join('/')))
+
+  const off = names.filter(name => isJunkPath(name) === inTorrent.has(name))
+  check('and the gate drops exactly what the library drops from a list',
+    off.length === 0, off.length ? `disagreed about ${off.join(', ')}` : `${names.length} names`)
+}
+
+/** parse-torrent, which is CommonJS-ish depending on the version. */
+async function parseTorrentFile (buffer) {
+  const mod = await import('parse-torrent')
+  return (mod.default ?? mod)(buffer)
 }
 
 /**

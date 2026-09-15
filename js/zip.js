@@ -305,6 +305,7 @@ function checkPath (path) {
  * Without that, a perfectly good archive was refused as having no files in it.
  */
 function findEndRecord (tail, fileSize, tailFrom) {
+  let plausible = null
   for (let i = tail.bytes.length - 22; i >= 0; i--) {
     if (tail.view.getUint32(i, true) !== EOCD) continue
     const at = tailFrom + i
@@ -325,6 +326,19 @@ function findEndRecord (tail, fileSize, tailFrom) {
     const isZip64 = offset === 0xffffffff || tail.view.getUint16(i + 10, true) === 0xffff
 
     if (commentFits && (indexEndsHere || isZip64)) return at
+    if (commentFits) plausible = at
+  }
+
+  // A record whose comment length fits but whose index does not end where it
+  // says is a real end record in an archive Spore cannot follow: something sits
+  // between the index and the record — a zip64 record and locator written
+  // unconditionally by some tools even when every value still fits in 32 bits,
+  // or bytes prepended by a self-extracting stub. Telling its author "this is
+  // not a zip archive" would be false and unactionable.
+  if (plausible !== null) {
+    throw new ZipError(
+      'That archive has something in front of its index that Spore does not read. ' +
+      'Compressing the folder again usually produces one without it.')
   }
   throw new ZipError('That file is not a zip archive, or it is damaged.')
 }
