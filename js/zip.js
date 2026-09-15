@@ -33,7 +33,7 @@
  * which is what keeps this file the size it is.
  */
 
-import { ZIP_MAX_ENTRIES, ZIP_MAX_ENTRY_BYTES, ZIP_MAX_TOTAL_BYTES } from './config.js'
+import { ZIP_MAX_ENTRIES, ZIP_MAX_EXPANSION, ZIP_MAX_INFLATED_BYTES } from './config.js'
 
 const EOCD = 0x06054b50 // end of central directory
 const CENTRAL = 0x02014b50 // one entry in that directory
@@ -61,34 +61,28 @@ export class ZipError extends Error {
  *   file, the single shared root folder stripped, exactly as a drop gives.
  */
 export async function filesFromZip (blob) {
-  // Checked before the bytes are read, not after. Every cap below is derived
-  // from the archive's own index, and reaching that index means holding the
-  // whole file in memory first — so a large enough archive exhausts a phone
-  // before it has said anything about itself.
-  if (blob.size > ZIP_MAX_TOTAL_BYTES) {
-    throw new ZipError(`That archive is larger than ${megabytes(ZIP_MAX_TOTAL_BYTES)}.`)
-  }
-
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-
-  const entries = readCentralDirectory(bytes, view)
+  const entries = await readCentralDirectory(blob)
   if (entries.length === 0) throw new ZipError('That archive has no files in it.')
 
-  // Summed from the directory, so an oversized archive is refused before a
-  // single byte is inflated or allocated rather than partway through.
-  const total = entries.reduce((sum, entry) => sum + entry.size, 0)
-  if (total > ZIP_MAX_TOTAL_BYTES) {
+  // Only what has to be decompressed is counted. A stored entry is copied, not
+  // inflated, so it costs nothing to hold and nothing here limits it — which is
+  // the difference between a client people can put a film in and one they
+  // cannot. Summed from the index, so an archive is refused before a byte of it
+  // is inflated rather than part of the way through.
+  const inflating = entries
+    .filter(entry => entry.method === DEFLATED)
+    .reduce((sum, entry) => sum + entry.size, 0)
+
+  if (inflating > ZIP_MAX_INFLATED_BYTES) {
     throw new ZipError(
-      `That archive unpacks to more than ${megabytes(ZIP_MAX_TOTAL_BYTES)}, ` +
-      'which is more than a browser can hold and seed.')
+      `That archive has more than ${megabytes(ZIP_MAX_INFLATED_BYTES)} of compressed ` +
+      'files in it, which is more than a browser can unpack and hold at once. ' +
+      'Media stored without compression does not count towards this.')
   }
 
   const files = []
-
   for (const entry of entries) {
-    const contents = await readEntry(bytes, view, entry)
-    const file = new File([contents], basename(entry.path), lastModified(entry))
+    const file = await readEntry(blob, entry)
     file.fullPath = entry.path
     files.push(file)
   }
@@ -116,17 +110,26 @@ export async function filesFromZip (blob) {
  * agree. Reading the directory also means the whole entry list is known, and
  * every refusal below has been made, before a single byte is inflated.
  */
-function readCentralDirectory (bytes, view) {
-  const start = findEndRecord(bytes, view)
+async function readCentralDirectory (blob) {
+  if (blob.size < 22) throw new ZipError('That file is not a zip archive.')
 
-  const count = view.getUint16(start + 10, true)
-  const size = view.getUint32(start + 12, true)
-  const at0 = view.getUint32(start + 16, true)
+  // Two slices, and never the whole file. The end record lives in the last few
+  // kilobytes; it says where the index is, and the index is read on its own.
+  // An archive can be larger than memory — that is rather the point of putting
+  // one in a BitTorrent client — so the only thing held here is its table of
+  // contents.
+  const tailFrom = Math.max(0, blob.size - MAX_TRAILER)
+  const tail = await slice(blob, tailFrom, blob.size)
+  const endAt = findEndRecord(tail, blob.size, tailFrom)
+
+  const count = tail.view.getUint16(endAt - tailFrom + 10, true)
+  const size = tail.view.getUint32(endAt - tailFrom + 12, true)
+  const at0 = tail.view.getUint32(endAt - tailFrom + 16, true)
 
   if (at0 === 0xffffffff || size === 0xffffffff || count === 0xffff) {
     throw new ZipError('That archive is in zip64 format, which Spore does not read.')
   }
-  if (at0 + size > bytes.length) throw new ZipError('That archive is truncated.')
+  if (at0 + size > blob.size) throw new ZipError('That archive is truncated.')
 
   // Bytes are not the only budget. Sixty-five thousand empty entries weigh
   // nothing and stay under every cap above, while each one becomes a File, a
@@ -136,47 +139,40 @@ function readCentralDirectory (bytes, view) {
     throw new ZipError(`That archive holds more than ${ZIP_MAX_ENTRIES} files.`)
   }
 
+  const index = await slice(blob, at0, at0 + size)
   const entries = []
   const seen = new Set()
-  let at = at0
+  let at = 0
 
   for (let i = 0; i < count; i++) {
-    if (at + 46 > bytes.length || view.getUint32(at, true) !== CENTRAL) {
+    if (at + 46 > size || index.view.getUint32(at, true) !== CENTRAL) {
       throw new ZipError('That archive’s index is damaged.')
     }
 
     const entry = {
-      flags: view.getUint16(at + 8, true),
-      method: view.getUint16(at + 10, true),
-      time: view.getUint16(at + 12, true),
-      date: view.getUint16(at + 14, true),
-      crc: view.getUint32(at + 16, true),
-      compressed: view.getUint32(at + 20, true),
-      size: view.getUint32(at + 24, true),
-      offset: view.getUint32(at + 42, true)
+      flags: index.view.getUint16(at + 8, true),
+      method: index.view.getUint16(at + 10, true),
+      time: index.view.getUint16(at + 12, true),
+      date: index.view.getUint16(at + 14, true),
+      crc: index.view.getUint32(at + 16, true),
+      compressed: index.view.getUint32(at + 20, true),
+      size: index.view.getUint32(at + 24, true),
+      offset: index.view.getUint32(at + 42, true)
     }
 
-    const nameLength = view.getUint16(at + 28, true)
-    const extraLength = view.getUint16(at + 30, true)
-    const commentLength = view.getUint16(at + 32, true)
-    const external = view.getUint32(at + 38, true)
+    const nameLength = index.view.getUint16(at + 28, true)
+    const extraLength = index.view.getUint16(at + 30, true)
+    const commentLength = index.view.getUint16(at + 32, true)
+    const external = index.view.getUint32(at + 38, true)
 
-    // The record must lie inside the directory the end record declared. Without
+    // The record must lie inside the index the end record declared. Without
     // this the name was read from a `subarray` that silently clamps at the end
     // of the file — a truncated archive producing a plausible short name — and
     // the next lap read past the end and threw a raw RangeError.
     const end = at + 46 + nameLength + extraLength + commentLength
-    if (end > at0 + size || end > bytes.length) {
-      throw new ZipError('That archive’s index is truncated.')
-    }
+    if (end > size) throw new ZipError('That archive’s index is truncated.')
 
-    // Bit 11 promises UTF-8. Archives predating it use CP437, and rather than
-    // carry a code page table to publish a file called `perché.html`, a name
-    // that is not valid UTF-8 is refused. Decoding it loosely would republish
-    // the file under a different name, and every relative link to it would then
-    // resolve to nothing — a silent repair, which is the thing this reader does
-    // not do.
-    const raw = bytes.subarray(at + 46, at + 46 + nameLength)
+    const raw = index.bytes.subarray(at + 46, at + 46 + nameLength)
     // Bit 11 is the archive's promise that its names are UTF-8. Without it they
     // are CP437, and some CP437 byte pairs are valid UTF-8 by coincidence — so
     // checking the decode alone would let exactly those through under a
@@ -202,8 +198,11 @@ function readCentralDirectory (bytes, view) {
     if (entry.size === 0xffffffff || entry.compressed === 0xffffffff) {
       throw new ZipError(`${path} is stored in zip64 format, which Spore does not read.`)
     }
-    if (entry.size > ZIP_MAX_ENTRY_BYTES) {
-      throw new ZipError(`${path} is larger than ${megabytes(ZIP_MAX_ENTRY_BYTES)}.`)
+    // What a bomb actually is: a ratio, not a size. Refused from the index, so
+    // nothing is inflated to discover it. A floor, because a few hundred bytes
+    // expanding from a handful is ordinary and means nothing.
+    if (entry.size > 65_536 && entry.size > entry.compressed * ZIP_MAX_EXPANSION) {
+      throw new ZipError(`${path} claims to expand more than ${ZIP_MAX_EXPANSION}-fold.`)
     }
     // A zip can carry unix mode bits. A symlink is a file whose contents are a
     // path, and following one is how an archive reaches something it does not
@@ -227,6 +226,12 @@ function readCentralDirectory (bytes, view) {
   }
 
   return entries
+}
+
+/** A window onto part of the archive, read once and read small. */
+async function slice (blob, from, to) {
+  const bytes = new Uint8Array(await blob.slice(from, to).arrayBuffer())
+  return { bytes, view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) }
 }
 
 /**
@@ -283,69 +288,96 @@ function checkPath (path) {
  * bytes that follow it — which a coincidence inside a comment will not do.
  * Without that, a perfectly good archive was refused as having no files in it.
  */
-function findEndRecord (bytes, view) {
-  if (bytes.length < 22) throw new ZipError('That file is not a zip archive.')
-
-  // Only the real record is looked for. A zip64 shortcut used to sit here,
-  // throwing on any `PK\x06\x06` found while scanning, and it had exactly the
-  // bug the comment-length rule above exists to prevent: those four bytes
-  // inside an ordinary comment refused a perfectly good archive. Zip64 is still
-  // refused — by its markers in the record itself, which cannot be faked by a
-  // coincidence in a comment.
-  const from = Math.max(0, bytes.length - MAX_TRAILER)
-  for (let at = bytes.length - 22; at >= from; at--) {
-    if (view.getUint32(at, true) !== EOCD) continue
+function findEndRecord (tail, fileSize, tailFrom) {
+  for (let i = tail.bytes.length - 22; i >= 0; i--) {
+    if (tail.view.getUint32(i, true) !== EOCD) continue
+    const at = tailFrom + i
 
     // Two conditions, because the comment rule alone is a heuristic and this is
     // a fact about the format. The comment follows the record, so a comment can
     // contain a convincing forgery — including one whose length field happens
-    // to match the bytes after it. The directory it points at, though, has to
-    // end exactly where the record begins.
-    const commentFits = view.getUint16(at + 20, true) === bytes.length - at - 22
-    const offset = view.getUint32(at + 16, true)
-    const directoryEndsHere = offset + view.getUint32(at + 12, true) === at
+    // to match the bytes after it. The index it points at, though, has to end
+    // exactly where the record begins.
+    const commentFits = tail.view.getUint16(i + 20, true) === fileSize - at - 22
+    const offset = tail.view.getUint32(i + 16, true)
+    const indexEndsHere = offset + tail.view.getUint32(i + 12, true) === at
 
     // A zip64 archive puts a sentinel where that offset goes, so it can never
     // satisfy the second condition — and refusing it here would tell its author
     // "this is not a zip archive", which is both false and useless. It is
     // recognised so that it can be refused by name a few lines further down.
-    const isZip64 = offset === 0xffffffff || view.getUint16(at + 10, true) === 0xffff
+    const isZip64 = offset === 0xffffffff || tail.view.getUint16(i + 10, true) === 0xffff
 
-    if (commentFits && (directoryEndsHere || isZip64)) return at
+    if (commentFits && (indexEndsHere || isZip64)) return at
   }
   throw new ZipError('That file is not a zip archive, or it is damaged.')
 }
 
-/** Inflate one entry, checking it arrived intact. */
-async function readEntry (bytes, view, entry) {
-  const at = entry.offset
-  if (at + 30 > bytes.length || view.getUint32(at, true) !== LOCAL) {
+/**
+ * One entry, as a File, without the archive ever being held whole.
+ *
+ * A stored entry is the author's bytes verbatim, so it is handed over as a
+ * slice of the file on disk: WebTorrent reads that in pieces the same way it
+ * reads a dropped file, and a two-gigabyte film never becomes two gigabytes of
+ * memory. Only a compressed entry has to be materialised, because its bytes do
+ * not exist anywhere until they are inflated.
+ */
+async function readEntry (blob, entry) {
+  const header = await slice(blob, entry.offset, Math.min(entry.offset + 30, blob.size))
+  if (header.bytes.length < 30 || header.view.getUint32(0, true) !== LOCAL) {
     throw new ZipError(`${entry.path} is not where the archive says it is.`)
   }
 
   // The local header is read only for its own two length fields: the data
-  // begins after them, and they are allowed to differ from the directory's.
-  const nameLength = view.getUint16(at + 26, true)
-  const extraLength = view.getUint16(at + 28, true)
-  const from = at + 30 + nameLength + extraLength
+  // begins after them, and they are allowed to differ from the index's.
+  const from = entry.offset + 30 +
+    header.view.getUint16(26, true) + header.view.getUint16(28, true)
 
-  if (from + entry.compressed > bytes.length) {
+  if (from + entry.compressed > blob.size) {
     throw new ZipError(`${entry.path} runs past the end of the archive.`)
   }
 
-  const raw = bytes.subarray(from, from + entry.compressed)
-  const contents = entry.method === STORED ? raw : await inflate(raw, entry)
+  const raw = blob.slice(from, from + entry.compressed)
+  const named = [basename(entry.path), lastModified(entry)]
 
-  if (contents.length !== entry.size) {
-    throw new ZipError(`${entry.path} did not unpack to the size the archive claims.`)
+  if (entry.method === STORED) {
+    if (entry.compressed !== entry.size) {
+      throw new ZipError(`${entry.path} is stored but claims two different sizes.`)
+    }
+    await checkCrc(entry, raw.stream())
+    return new File([raw], ...named)
   }
-  // Checked because the alternative is publishing a corrupt file under a
-  // signature, which is the one failure this project cannot shrug at: the bytes
-  // would verify perfectly as the bytes that were signed, and still be wrong.
-  if (crc32(contents) !== entry.crc) {
+
+  return new File([await inflate(raw, entry)], ...named)
+}
+
+/**
+ * Read a stream only to check it arrived intact.
+ *
+ * A pass over the bytes rather than a copy of them: this is what lets a stored
+ * entry be checked without being held. It is checked at all because publishing
+ * a corrupt file under a good signature is the one failure this project cannot
+ * shrug at — the bytes would verify perfectly as the bytes that were signed,
+ * and still be wrong.
+ */
+async function checkCrc (entry, stream) {
+  let crc = 0xffffffff
+  let total = 0
+
+  const reader = stream.getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.length
+    crc = crcInto(crc, value)
+  }
+
+  if (total !== entry.size) {
+    throw new ZipError(`${entry.path} is not the size the archive claims.`)
+  }
+  if (((crc ^ 0xffffffff) >>> 0) !== entry.crc) {
     throw new ZipError(`${entry.path} is corrupt.`)
   }
-  return contents
 }
 
 async function inflate (raw, entry) {
@@ -354,13 +386,14 @@ async function inflate (raw, entry) {
   // person holding the archive. Older than Safari 16.4 is the realistic case.
   let stream
   try {
-    stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+    stream = raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))
   } catch {
     throw new ZipError('This browser cannot unpack zip archives. It is too old.')
   }
 
   const chunks = []
   let total = 0
+  let crc = 0xffffffff
 
   const reader = stream.getReader()
   for (;;) {
@@ -373,13 +406,21 @@ async function inflate (raw, entry) {
     if (read.done) break
 
     total += read.value.length
-    // The declared size was checked against the cap before anything was
+    // The declared size was weighed against the budget before anything was
     // inflated; this catches an archive that lied about it.
     if (total > entry.size) {
       await reader.cancel().catch(() => {})
       throw new ZipError(`${entry.path} is larger than the archive claims.`)
     }
+    crc = crcInto(crc, read.value)
     chunks.push(read.value)
+  }
+
+  if (total !== entry.size) {
+    throw new ZipError(`${entry.path} did not unpack to the size the archive claims.`)
+  }
+  if (((crc ^ 0xffffffff) >>> 0) !== entry.crc) {
+    throw new ZipError(`${entry.path} is corrupt.`)
   }
 
   const out = new Uint8Array(total)
@@ -432,10 +473,10 @@ const CRC_TABLE = (() => {
   return table
 })()
 
-function crc32 (bytes) {
-  let crc = 0xffffffff
+/** Folded chunk by chunk, so a large entry is never held to be checked. */
+function crcInto (crc, bytes) {
   for (let i = 0; i < bytes.length; i++) {
     crc = CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
   }
-  return (crc ^ 0xffffffff) >>> 0
+  return crc
 }

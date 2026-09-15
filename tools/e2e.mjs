@@ -61,8 +61,8 @@ const REFUSED_ARCHIVES = [
   { name: 'TRAILING_DOT', file: 'trailing-dot.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAPebLV2DFtyMAwAAAAEAAAAGAAAAc2l0ZS8uqwAAUEsBAhQDFAAAAAgA95stXYMW3IwDAAAAAQAAAAYAAAAAAAAAAAAAAIABAAAAAHNpdGUvLlBLBQYAAAAAAQABADQAAAAnAAAAAAA=' },
   { name: 'ZIP64', file: 'zip64.zip', because: 'zip64 format', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAD/////AAA=' },
   { name: 'DRIVE_LETTER', file: 'drive-letter.zip', because: 'names a drive', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAANAAAAQzovaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAADQAAAAAAAAAAAAAAgAEAAAAAQzovaW5kZXguaHRtbFBLBQYAAAAAAQABADsAAAA1AAAAAAA=' },
-  { name: 'ENTRY_TOO_BIG', file: 'entry-too-big.zip', because: 'larger than 32 MB', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAAWmICCgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
-  { name: 'TOTAL_TOO_BIG', file: 'total-too-big.zip', because: 'more than 64 MB', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAcGFydDAuaHRtbLPJMLSrsNEHkgBQSwMEFAAAAAgAt2svXVJBzP0KAAAACgAAAAoAAABwYXJ0MS5odG1ss8kwtKuw0QeSAFBLAwQUAAAACAC3ay9dUkHM/QoAAAAKAAAACgAAAHBhcnQyLmh0bWyzyTC0q7DRB5IAUEsBAhQDFAAAAAgAt2svXVJBzP0KAAAAgMPJAQoAAAAAAAAAAAAAAIABAAAAAHBhcnQwLmh0bWxQSwECFAMUAAAACAC3ay9dUkHM/QoAAACAw8kBCgAAAAAAAAAAAAAAgAEyAAAAcGFydDEuaHRtbFBLAQIUAxQAAAAIALdrL11SQcz9CgAAAIDDyQEKAAAAAAAAAAAAAACAAWQAAABwYXJ0Mi5odG1sUEsFBgAAAAADAAMAqAAAAJYAAAAAAA==' }
+  { name: 'EXPANSION_BOMB', file: 'expansion-bomb.zip', because: 'expand more than 2000-fold', base64: 'UEsDBBQAAAAIAARxL12PXQ5eBgAAAGQAAAAKAAAAaW5kZXguaHRtbKuooD0AAFBLAQIUAxQAAAAIAARxL12PXQ5eBgAAAAAoa+4KAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAAC4AAAAAAA==' },
+  { name: 'TOO_MUCH_TO_HOLD', file: 'too-much-to-hold.zip', because: 'more than 256 MB of compressed files', base64: 'UEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDAuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDEuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDIuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDMuaHRtbGNgGAWjYBQMdwAAUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABAAAAAHAwLmh0bWxQSwECFAMUAAAACAAEcS9dgBcLBkBCDwCASl0FBwAAAAAAAAAAAAAAgAEwAAAAcDEuaHRtbFBLAQIUAxQAAAAIAARxL12AFwsGQEIPAIBKXQUHAAAAAAAAAAAAAACAAWAAAABwMi5odG1sUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABkAAAAHAzLmh0bWxQSwUGAAAAAAQABADUAAAAwAAAAAAA' }
 ]
 
 /**
@@ -358,6 +358,7 @@ async function run () {
   await checkSignatureLandsWhereReadersLook()
   await checkArchiveWithSomethingBesideTheSite()
   await checkWhatMustNotBeSigned()
+  await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -960,6 +961,110 @@ async function checkWhatMustNotBeSigned () {
   }, againLink)
   check('and it carries one signature, not the old one and a new one',
     resigned.filter(path => /spore\.sig$/.test(path)).length === 1, JSON.stringify(resigned))
+
+  await page.close()
+}
+
+/**
+ * The thing a BitTorrent client is for: something too big to hold.
+ *
+ * The reader used to read the whole archive with `arrayBuffer()` and then
+ * materialise every entry, so it needed a ceiling — and the ceiling was a
+ * number that would have refused a film, in a client whose own file listing
+ * exists so that "a video plays". The ceiling was covering an implementation,
+ * not protecting anybody: the folder and picker paths never had one, because
+ * WebTorrent reads a File from disk in pieces.
+ *
+ * A stored entry is the author's bytes verbatim, so it is handed over as a
+ * slice of the file on disk and never becomes memory. The archive built here is
+ * larger than every cap this branch ever carried.
+ */
+async function checkAnArchiveTooBigToHold () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 60_000 })
+
+  // Built in the page rather than shipped: seventy megabytes of base64 does not
+  // belong in a source file, and a stored zip is a header, the bytes, and an
+  // index, which is short enough to write here.
+  const built = await page.evaluate(async megabytes => {
+    const table = new Uint32Array(256)
+    for (let i = 0; i < 256; i++) {
+      let c = i
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+      table[i] = c >>> 0
+    }
+    const crc32 = bytes => {
+      let crc = 0xffffffff
+      for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+      return (crc ^ 0xffffffff) >>> 0
+    }
+
+    // Incompressible on purpose, which is also why a real mp4 is stored.
+    const movie = new Uint8Array(megabytes * 1024 * 1024)
+    for (let i = 0; i < movie.length; i++) movie[i] = (i * 2654435761) & 0xff
+
+    const page = new TextEncoder().encode(
+      '<!doctype html><meta charset="utf-8"><title>film</title><h1>Film</h1>')
+
+    const parts = []
+    const central = []
+    let offset = 0
+
+    for (const [name, bytes] of [['film/index.html', page], ['film/movie.mp4', movie]]) {
+      const nameBytes = new TextEncoder().encode(name)
+      const crc = crc32(bytes)
+
+      const local = new DataView(new ArrayBuffer(30))
+      local.setUint32(0, 0x04034b50, true)
+      local.setUint16(4, 20, true)
+      local.setUint16(8, 0, true) // stored
+      local.setUint32(14, crc, true)
+      local.setUint32(18, bytes.length, true)
+      local.setUint32(22, bytes.length, true)
+      local.setUint16(26, nameBytes.length, true)
+
+      const entry = new DataView(new ArrayBuffer(46))
+      entry.setUint32(0, 0x02014b50, true)
+      entry.setUint16(4, 20, true)
+      entry.setUint16(6, 20, true)
+      entry.setUint16(10, 0, true) // stored
+      entry.setUint32(16, crc, true)
+      entry.setUint32(20, bytes.length, true)
+      entry.setUint32(24, bytes.length, true)
+      entry.setUint16(28, nameBytes.length, true)
+      entry.setUint32(42, offset, true)
+
+      parts.push(new Uint8Array(local.buffer), nameBytes, bytes)
+      central.push(new Uint8Array(entry.buffer), nameBytes)
+      offset += 30 + nameBytes.length + bytes.length
+    }
+
+    const indexSize = central.reduce((sum, part) => sum + part.length, 0)
+    const end = new DataView(new ArrayBuffer(22))
+    end.setUint32(0, 0x06054b50, true)
+    end.setUint16(8, 2, true)
+    end.setUint16(10, 2, true)
+    end.setUint32(12, indexSize, true)
+    end.setUint32(16, offset, true)
+
+    const archive = new File([...parts, ...central, new Uint8Array(end.buffer)],
+      'film.zip', { type: 'application/zip' })
+
+    const { filesFromZip } = await import('/js/zip.js')
+    const unpacked = await filesFromZip(archive)
+    return {
+      archive: archive.size,
+      files: unpacked.files.map(file => ({ path: file.fullPath, size: file.size }))
+    }
+  }, 70)
+
+  const movie = built.files.find(file => file.path.endsWith('.mp4'))
+  check('an archive far larger than any cap this branch ever had is accepted',
+    built.archive > 70_000_000, `${Math.round(built.archive / 1e6)} MB`)
+  check('and the stored file comes out whole',
+    movie && movie.size === 70 * 1024 * 1024, JSON.stringify(built.files))
 
   await page.close()
 }
