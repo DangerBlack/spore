@@ -1,5 +1,16 @@
 /**
- * Locating the page to render inside a torrent.
+ * What a site is: the rules, for both ends of the swarm.
+ *
+ * This module is imported by the viewer, which asks them of a torrent, and by
+ * publishing, which asks them of files that are about to become one. That is
+ * the point of it being one module: every serious defect on this branch was the
+ * two sides answering one of these questions with two pieces of code, agreeing
+ * on every layout anyone had tried and differing on one nobody had.
+ *
+ * It depends on nothing that needs a browser, so the checks can ask it the same
+ * questions directly.
+ *
+ * ## Locating the page to render inside a torrent.
  *
  * One rule, and it is a rule rather than a search: **the entry page is
  * `index.html` in the site's root, and nowhere else.** A torrent's root is the
@@ -20,7 +31,7 @@
 
 import { TORRENT_PATH } from './config.js'
 import { MAX_KEY_BYTES } from './identity.js'
-import { MAX_MANIFEST_BYTES } from './manifest.js'
+import { MAX_MANIFEST_BYTES, isJunkPath } from './manifest.js'
 
 /** `index.html` directly inside the torrent's single root folder, or alone. */
 const ENTRY = /^(?:[^/]+\/)?index\.html?$/i
@@ -50,6 +61,107 @@ export function findEntry (torrent) {
  */
 export function chooseEntry (paths) {
   return paths.find(path => ENTRY.test(path)) ?? null
+}
+
+/** One spelling of a file's path, used by everything that compares them. */
+export function pathOf (file) {
+  return (file.fullPath || file.name).replace(/\\/g, '/')
+}
+
+/**
+ * What a reader will land on, or `null` if they will land on a file list.
+ *
+ * `index.html` at the top of the set and nowhere else. There is no root to
+ * account for here because `asSite` has already removed it: the paths this sees
+ * are the paths that will be published, one folder shallower than the reader's
+ * only because BitTorrent adds that folder itself.
+ *
+ * @param {File[]} files
+ * @returns {string|null}
+ */
+export function entryFor (files) {
+  return files.map(pathOf).find(path => /^index\.html?$/i.test(path)) ?? null
+}
+
+/**
+ * A set of files as the site it is meant to be, at the paths it will have.
+ *
+ * Two jobs, and the first is the one that matters.
+ *
+ * **Every path is made relative to the site's root**, because otherwise
+ * `create-torrent` does it — and it does it to the set it publishes, not to the
+ * set that was signed. It removes one shared top folder, silently, whenever
+ * every file has one. So `spore.sig` described `sito/index.html` while the
+ * torrent contained `index.html`, a reader comparing the two found a file
+ * missing, and the site was reported as having been altered. Every serious
+ * defect on this branch was a version of that sentence.
+ *
+ * Handing over paths that are already root-relative leaves nothing to remove.
+ * It strips repeatedly, because the library takes one level per pass and would
+ * take the next one otherwise, and it stops as soon as some file sits at the
+ * root — which is exactly the condition under which the library does nothing.
+ * The outermost folder becomes the torrent's name, so the link still says what
+ * the author called the thing.
+ *
+ * Second: a lone page becomes `index.html`, whatever it was called, because
+ * somebody who picks `il-mio-post.html` on a phone means it to be the site, and
+ * the alternative is telling them to rename a file with tools they do not have.
+ *
+ * Neither job touches a byte. Both rewrite `fullPath`, which is all
+ * `create-torrent` reads: for one file it takes that path's basename, and for
+ * several it takes the paths entire.
+ *
+ * @param {File[]} files
+ * @returns {{files: File[], renamed: {from: string, to: string}|null, name: string|null}}
+ */
+export function asSite (files) {
+  let name = null
+  for (let top = sharedTop(files.map(pathOf)); top; top = sharedTop(files.map(pathOf))) {
+    name = name ?? top.slice(0, -1)
+    for (const file of files) file.fullPath = pathOf(file).slice(top.length)
+  }
+
+  if (entryFor(files)) return { files, renamed: null, name }
+
+  const pages = files.filter(file => /^[^/]+\.html?$/i.test(pathOf(file)))
+  if (pages.length !== 1) return { files, renamed: null, name }
+
+  const from = pathOf(pages[0])
+  pages[0].fullPath = 'index.html'
+  return {
+    files,
+    renamed: { from, to: 'index.html' },
+    name: name ?? from.replace(/\.html?$/i, '')
+  }
+}
+
+function sharedTop (paths) {
+  const cut = paths[0]?.indexOf('/') ?? -1
+  if (cut < 1) return ''
+
+  const top = paths[0].slice(0, cut + 1)
+  return paths.every(path => path.startsWith(top)) ? top : ''
+}
+
+/**
+ * The same files, without what an operating system left among them.
+ *
+ * The rule lives in `manifest.js`, with the question it answers — what a
+ * signature covers — because the seeder needs the identical answer and
+ * `create-torrent` applies its own copy when handed a directory. The torrent is
+ * built here with the library's filtering **off**, so for this path there is
+ * exactly one filter and it is this one: the library used to drop these
+ * silently *after* `spore.sig` had hashed them, and every reader was told the
+ * site had been altered.
+ *
+ * @param {File[]} files @returns {{files: File[], dropped: string[]}}
+ */
+export function dropJunk (files) {
+  const junk = file => isJunkPath(pathOf(file))
+  return {
+    files: files.filter(file => !junk(file)),
+    dropped: files.filter(junk).map(pathOf)
+  }
 }
 
 /** URL the viewer iframe points at, served by the worker from the swarm. */
