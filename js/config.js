@@ -73,4 +73,31 @@ export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-13.2'
+export const GATE_VERSION = '2026-09-15.18'
+
+/**
+ * What a .zip may be.
+ *
+ * There is no limit on how large a published site may be, and there must not
+ * be: this is a BitTorrent client, people will put films in it, and the folder
+ * and file-picker paths have never had one — WebTorrent reads a `File` from
+ * disk in pieces and never holds it whole.
+ *
+ * An archive is only different in the one way that matters: **bytes that get
+ * decompressed have to be held, bytes that get copied do not.** An entry stored
+ * without compression — which is what video, audio and already-compressed
+ * images are — is handed to the swarm as a slice of the original file and never
+ * enters memory, so nothing here constrains it. Only what actually inflates is
+ * counted, and only because it has nowhere to live but RAM.
+ *
+ * `ZIP_MAX_EXPANSION` is the bomb guard, and it is the ratio rather than a size
+ * because that is what a bomb is: 42 kilobytes claiming to be a terabyte. Real
+ * text compresses by tens, pathological-but-honest text by hundreds; a bomb is
+ * six figures or more.
+ *
+ * All three are still guesses. They should come from measuring a mid-range
+ * phone, which has not been done.
+ */
+export const ZIP_MAX_INFLATED_BYTES = 256_000_000
+export const ZIP_MAX_EXPANSION = 2_000
+export const ZIP_MAX_ENTRIES = 2_000

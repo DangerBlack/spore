@@ -52,6 +52,103 @@ import { fromHex, toHex } from './bencode.js'
 
 export const SIGNATURE_FILE = 'spore.sig'
 
+/**
+ * How large a `spore.sig` may be, on both sides of the swarm.
+ *
+ * The reader needs a limit because it is reading a file out of a stranger's
+ * torrent: without one, a hostile site can put two gigabytes at this path and
+ * have every reader pull it down and hold it *before* any check has begun.
+ *
+ * The publisher needs the same limit for the opposite reason. A manifest is one
+ * line per file, so a large honest site can make one no reader will open — and
+ * the site then shows as unsigned, correctly signed, with nothing anywhere
+ * saying why. That was true here: the reader refused above half a megabyte and
+ * nothing on the publishing side had ever heard of the number.
+ *
+ * So there is one number, it lives beside the format it describes, and both
+ * ends import it. Four megabytes is roughly forty thousand files, which is far
+ * past anything a browser can publish and nothing beside the site it describes.
+ */
+export const MAX_MANIFEST_BYTES = 4_000_000
+
+/**
+ * The largest single file this gate will hash.
+ *
+ * WebCrypto has no streaming digest, so describing a file means holding all of
+ * it at once. Everything else about publishing is streamed — a stored archive
+ * entry reaches the swarm as a slice of the file on disk and never becomes
+ * memory — and this is the one place that cannot be, so it is the one place
+ * with a number.
+ *
+ * Above it a site is published exactly as it arrived: not hashed, not checked,
+ * not signed, and not stripped of whatever signature it came with. That is the
+ * honest outcome rather than a tab that dies during "Hashing 2 files…", and it
+ * still puts a film in a swarm, which is the thing that matters.
+ *
+ * A guess, like the archive numbers, and wanting the same phone to measure it.
+ */
+export const MAX_HASHABLE_BYTES = 512_000_000
+
+/**
+ * Would signing these paths produce a manifest no reader will open?
+ *
+ * Answered from the paths alone, before anything is hashed, because the cost of
+ * a manifest is one line per file and a line is 64 hex characters, a space, the
+ * path and a newline. The header adds a hundred bytes or so; the margin here is
+ * thousands of files wide, so an estimate is the honest tool.
+ *
+ * @param {string[]} paths site-relative
+ */
+export function manifestWouldExceed (paths) {
+  const bytes = paths.reduce(
+    (total, path) => total + 66 + new TextEncoder().encode(path).length, 256)
+  return bytes > MAX_MANIFEST_BYTES
+}
+
+/**
+ * Files an operating system leaves in a folder, which are not part of a site.
+ *
+ * This lives here because this module owns the question "what does a signature
+ * cover", and the answer has to be the same everywhere: the gate, the seeder,
+ * and `create-torrent`, which drops these on its own and cannot be told not to
+ * when it is handed a directory. Two rules that differ by one file produce a
+ * manifest describing something the torrent does not contain, and a reader
+ * reads that as tampering rather than as a stray — so the list is copied from
+ * `create-torrent` deliberately, and a check compares the two against the real
+ * library rather than trusting the copy.
+ *
+ * Both halves matter: a leading dot *and* a match. `Thumbs.db` is on the list
+ * and is not junk by this rule, because it has no leading dot.
+ */
+const JUNK = new RegExp([
+  '^npm-debug\\.log$', '^\\..*\\.swp$',
+  '^\\.DS_Store$', '^\\.AppleDouble$', '^\\.LSOverride$', '^Icon\\r$', '^\\._.*',
+  '^\\.Spotlight-V100(?:$|\\/)', '\\.Trashes', '^__MACOSX$',
+  '~$', '^Thumbs\\.db$', '^ehthumbs\\.db$', '^[Dd]esktop\\.ini$', '@eaDir$'
+].join('|'))
+
+/**
+ * Two rules, because `create-torrent` has two and applies them to two kinds of
+ * input. Handed a *list of files* it drops a name that begins with a dot and
+ * matches the list. Handed a *directory* it walks it, dropping every hidden
+ * entry and every name on the list whether or not it begins with a dot — and
+ * that one cannot be turned off, since `filterJunkFiles` only reaches the list.
+ *
+ * The gate hands over a list; the seeder hands over a directory. Naming both
+ * here, beside each other, is the only way the difference stays visible.
+ */
+
+/** What is dropped from a list of files: a dot *and* a match. */
+export function isJunkPath (path) {
+  const name = path.split('/').pop()
+  return name.startsWith('.') && JUNK.test(name)
+}
+
+/** What is dropped while walking a directory: hidden, *or* a match. */
+export function skippedWhenWalking (name) {
+  return name.startsWith('.') || JUNK.test(name)
+}
+
 /** Files that describe the signature rather than being covered by it. */
 const EXCLUDED = new Set([SIGNATURE_FILE])
 
@@ -196,13 +293,24 @@ export function unlistedIn (manifest, presentPaths) {
 /**
  * Build the entry list for a set of files.
  *
- * @param {{path: string, bytes: Uint8Array}[]} files
+ * One file's bytes have to exist at once — WebCrypto has no streaming digest —
+ * so the largest file in a site still has to fit in memory. Everything else is
+ * released as it goes.
+ *
+ * @param {{path: string, bytes: Uint8Array|Blob}[]} files
  */
 export async function manifestEntries (files) {
   const entries = []
   for (const file of files) {
     if (EXCLUDED.has(file.path)) continue
-    const digest = await crypto.subtle.digest('SHA-256', file.bytes)
+
+    // A Blob is read here rather than by the caller, one file at a time. The
+    // caller used to read them all first and hand over an array of byte arrays,
+    // which meant holding an entire site in memory in order to describe it —
+    // and a site can hold a film. The peak is now the largest single file
+    // rather than the sum of all of them.
+    const bytes = file.bytes instanceof Blob ? await file.bytes.arrayBuffer() : file.bytes
+    const digest = await crypto.subtle.digest('SHA-256', bytes)
     entries.push({ path: file.path, hash: toHex(new Uint8Array(digest)) })
   }
   return entries.sort(byPath)

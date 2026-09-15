@@ -5,8 +5,9 @@ host it.
 
 Spore is a single static page — the **gate**. Paste a magnet link and the site
 inside it renders, fetched from the swarm by peers rather than from a server.
-Drop a folder on the gate and it becomes a torrent that your tab seeds, with a
-link you can share. No account and no backend — your files go to readers, not
+Give the gate a folder, a `.zip` of one, or a single page, and it becomes a
+torrent that your tab seeds, with a link you can share. No account and no
+backend — your files go to readers, not
 to a host.
 
 The name: a spore is self-contained, spreads, survives dormant, and any one of
@@ -120,10 +121,42 @@ off-torrent requests stay blocked either way.
 
 ## Publishing
 
-Drop a folder with an `index.html` at the top and relative links inside. The
-files are hashed in your browser and never sent to a server — they travel
-directly to the readers who ask for them. You get a magnet and a shareable
-link, and your tab becomes the site's first seed.
+Three ways in, because a folder cannot always be chosen:
+
+- **Drop a folder**, or pick one — the fastest path where it exists.
+- **Pick a `.zip`** of that folder. It is unpacked in your browser, with no
+  library, and never held whole: files stored without compression — video,
+  audio, anything already compressed — are handed to the swarm straight out of
+  the archive, so size is no more a limit here than for a dropped folder. A zip
+  is a folder that fits through an ordinary file picker, which on some devices
+  is the only picker there is. iOS appears to offer no folder
+  picker at all — reported, not yet confirmed on a device, so the folder button
+  is still offered everywhere and this is the way round it if it is missing.
+- **Pick a page and its files.** A picker reports no relative paths, so
+  everything lands at the top of the site: a flat page publishes, and anything
+  in a subdirectory needs the zip.
+
+Relative links inside, and an `index.html` if you have one — a single page under
+any name works too, and a set of files with no entry page publishes as a
+browsable file list, which Spore says before it seeds anything rather than
+after.
+
+The site is the torrent's root folder: `index.html` lives there, and so do
+`spore.pub` and `spore.sig` if the site is signed. Nothing is searched for
+deeper down. A single page is published as `index.html` whatever you called it,
+and `__MACOSX/` is dropped, so a folder compressed on a Mac opens as a site.
+
+Republishing somebody else's site has two outcomes and no third: if it still
+verifies exactly as it arrived its files go out untouched and it stays theirs,
+and otherwise its key and signature are thrown away and you sign your own.
+
+Files an operating system leaves in a folder — `.DS_Store`, `__MACOSX/`,
+`._` thumbnails — are left out, and you are told which. They are not part of
+anybody's site, and signing them produces a site that reports itself as
+altered.
+
+The files are hashed in your browser and never sent to a server. You get
+a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.
 
@@ -423,7 +456,8 @@ js/
   site.js           finds a torrent's entry page
   viewer.js         the sandboxed iframe
   policy.js         per-site script opt-in, and the bridge to the worker
-  publish.js        dropped folder → seeded torrent
+  publish.js        a folder, a zip or loose files → seeded torrent
+  zip.js            reads a .zip with DecompressionStream, no dependency
   keep.js           opt-in offline storage: keep, forget, restore on boot
   idb.js            IndexedDB — the only thing that writes to disk
   magnet.js         parsing whatever the user pasted

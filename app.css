@@ -195,15 +195,50 @@ button:hover, .button:hover { border-color: var(--accent); }
 /* Its own line, with room under it. As an inline-block with no margin the
    button sat flush against the paragraph below, which reads as overlapping. */
 .pick {
-  display: inline-block;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin: 4px 0 18px;
 }
 
+/* Stacked at every width, and equal, because they never fit side by side: the
+   card is 278px and the two together want 322. Ragged pills under each other
+   read as an accident; a column of equal ones reads as two ways in. */
+.pick .button {
+  display: block;
+  text-align: center;
+}
+
+/* Invisible, but still in the focus order and still announced. `hidden` is
+   `display: none`, which takes a control out of the keyboard path entirely;
+   this leaves it exactly where it is and gives it no size. */
+.pick input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The label is the button, so the focus ring has to be drawn on the label when
+   the input inside it is focused — otherwise a keyboard user is somewhere with
+   nothing to show for it. */
+.pick .button:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button.secondary {
+  background: transparent;
+  color: var(--muted);
+}
+
+.button.secondary:hover { color: var(--ink); }
+
 @media (max-width: 560px) {
-  /* Full width and a bigger target: this is the button people press on a
-     phone, and it was the smallest thing on the card. */
-  .pick { display: block; }
-  .pick .button { display: block; text-align: center; padding: 12px; }
+  /* A bigger target: these are pressed with a thumb, and the folder one is the
+     one that does not work on the device where that matters most. */
+  .pick .button { padding: 12px; }
 }
 
 .share {
@@ -685,9 +720,24 @@ body.is-dragging .drop-overlay { display: flex; }
 /* The one line that is actually worse, marked so it is not skimmed past. */
 .author-facts dt.lost, .author-facts dd.lost { color: var(--danger); }
 
+#no-entry-dialog {
+  max-width: 32rem;
+  width: calc(100% - 2rem);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+#no-entry-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+#no-entry-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+#no-entry-dialog p { margin: 0 0 12px; }
+
 #signin-dialog,
 #author-dialog,
 #isolation-dialog,
+#no-entry-dialog,
 #diagnostics {
   max-height: calc(100dvh - 2rem);
   overflow-y: auto;
@@ -799,3 +849,20 @@ body.is-dragging .drop-overlay { display: flex; }
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* --- publishing something with no entry page ---------------------------- */
+
+.no-entry-files {
+  margin: 0 0 14px;
+  padding: 10px 12px 10px 28px;
+  max-height: 180px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.no-entry-files li { margin: 2px 0; word-break: break-all; }
+.no-entry-files li.muted { font-family: inherit; list-style: none; margin-left: -16px; }

@@ -12,18 +12,25 @@ import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
 import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
-import { checkPublishable, filesFromDrop, filesFromInput, publish } from './publish.js'
+import {
+  checkPublishable, filesFromDrop, filesFromInput, filesFromPicker, publish
+} from './publish.js'
 import {
   REMEMBER_WARNING, knownKey, labelFor, lastPublished, me, mostRecentKey, nextSeq,
   publicNameFor, publishedSeries, recordPublished, rememberKeyOnDevice,
   restoreRememberedKey, signIn, signOut, useIdentity
 } from './me.js'
 import { signUpdate } from './record.js'
-import { avatar, fingerprint, formatSporePub, normalizeSite, saltFor } from './identity.js'
 import {
-  SIGNATURE_FILE, checkFile, manifestEntries, missingFrom, signManifest, unlistedIn, verifyManifest
+  MAX_KEY_BYTES, avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
+} from './identity.js'
+import {
+  MAX_HASHABLE_BYTES, MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries,
+  manifestWouldExceed, missingFrom, signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
-import { entryURL, filePaths, findEntry, readManifest, readSporePub } from './site.js'
+import {
+  asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
+} from './site.js'
 import { SiteNotFound, getClient, openTorrent, startClient, startWorker } from './swarm.js'
 import { watchForUpdates } from './updates.js'
 import {
@@ -56,6 +63,7 @@ const ui = {
   shareNote: el('share-note'),
   shareOpen: el('share-open'),
   shareSuccessor: el('share-successor'),
+  shareUnsigned: el('share-unsigned'),
   shareLink: el('share-link'),
   copy: el('copy'),
   shareDismiss: el('share-dismiss'),
@@ -73,6 +81,11 @@ const ui = {
   errorRef: el('error-ref'),
   errorRetry: el('error-retry'),
   errorHome: el('error-home'),
+  filesInput: el('files-input'),
+  noEntryDialog: el('no-entry-dialog'),
+  noEntryFiles: el('no-entry-files'),
+  noEntryAccept: el('no-entry-accept'),
+  noEntryCancel: el('no-entry-cancel'),
   listing: el('listing'),
   listingName: el('listing-name'),
   listingSummary: el('listing-summary'),
@@ -278,8 +291,10 @@ function navigate (ref) {
  * directly; `popstate` is wired so the browser's own back button still works.
  */
 function goHome () {
-  if (!location.hash) return
-  history.pushState(null, '', location.pathname + location.search)
+  // Routed even with no fragment to clear. A publish that is refused shows the
+  // error page without ever setting one, and returning early left its only way
+  // out — a button reading "Publish a site instead" — doing nothing at all.
+  if (location.hash) history.pushState(null, '', location.pathname + location.search)
   route()
 }
 
@@ -493,7 +508,7 @@ async function render (torrent, entry) {
  * @returns {Promise<{sign: boolean}|null>} null if the publisher backed out
  */
 function askAboutSigning (what) {
-  ui.signinWhat.textContent = what ?? 'this folder'
+  ui.signinWhat.textContent = what ?? 'these files'
   ui.passphrase.value = ''
 
   // Offered back rather than asked for again. A publisher who named their key
@@ -623,6 +638,104 @@ function askAboutSigning (what) {
       ui.signinCancel.removeEventListener('click', onCancel)
       ui.signinDismiss.removeEventListener('click', onCancel)
       ui.signinDialog.removeEventListener('close', onClose)
+    }
+  })
+}
+
+
+
+/**
+ * Hand the screen back after a publish that did not happen.
+ *
+ * A site that was already open is left where it is: the reader was reading it,
+ * and backing out of publishing something else is not a reason to close it.
+ */
+function backOut () {
+  ui.notice.hidden = true
+  restoreStage()
+}
+
+/**
+ * Put back whatever the publish attempt covered up.
+ *
+ * `busy()` hides the landing page *and* the file listing, and a listing is not
+ * drawn in the viewer, so nothing else brings it back: for a torrent with no
+ * entry page, "there is still a site open" and "there is still something on
+ * screen" were two different questions, and only the first was being asked.
+ */
+function restoreStage () {
+  if (!current) return showWelcome()
+  if (!findEntry(current.torrent)) showListing(current.torrent)
+}
+
+/**
+ * A publish that failed, reported without destroying what is on screen.
+ *
+ * Drops are wired to the whole window, so a corrupt archive can land while
+ * somebody is reading a site. `fail()` clears `current` and replaces the viewer
+ * with an error page, which for a refused archive means the reader loses the
+ * site they were on because of a file they dropped by accident.
+ */
+function failToPublish (error) {
+  if (!current) return fail(new PublishFailed(error))
+
+  // Before the notice, because showing a listing clears it.
+  restoreStage()
+  ui.notice.textContent = `That could not be published: ${error.message}`
+  ui.notice.className = 'notice notice--error'
+  ui.notice.hidden = false
+}
+
+
+/** A list of paths, with a tail when there are more than a dialog should show. */
+function listItems (paths, limit = 12) {
+  const items = paths.sort((a, b) => a.localeCompare(b)).slice(0, limit).map(path => {
+    const item = document.createElement('li')
+    item.textContent = path
+    return item
+  })
+  if (paths.length > limit) {
+    const more = document.createElement('li')
+    more.className = 'muted'
+    more.textContent = `and ${paths.length - limit} more`
+    items.push(more)
+  }
+  return items
+}
+
+/**
+ * Tell an author their files will open as a list, and let them go back.
+ *
+ * Deliberately a question and not an error: `chooseEntry` is the same rule the
+ * viewer uses, so this is Spore reporting what a reader will actually land on,
+ * which is a thing the author is in a position to change and nobody else is.
+ *
+ * @returns {Promise<boolean>} whether to publish it anyway
+ */
+function askAboutMissingEntry (files) {
+  ui.noEntryFiles.replaceChildren(...listItems(files.map(file => file.fullPath || file.name)))
+  ui.noEntryDialog.showModal()
+
+  return new Promise(resolve => {
+    const answer = publishAnyway => {
+      ui.noEntryDialog.close()
+      cleanup()
+      resolve(publishAnyway)
+    }
+
+    const onAccept = () => answer(true)
+    const onCancel = () => answer(false)
+    // Dismissing is going back, not agreeing.
+    const onClose = () => { cleanup(); resolve(false) }
+
+    ui.noEntryAccept.addEventListener('click', onAccept)
+    ui.noEntryCancel.addEventListener('click', onCancel)
+    ui.noEntryDialog.addEventListener('close', onClose)
+
+    function cleanup () {
+      ui.noEntryAccept.removeEventListener('click', onAccept)
+      ui.noEntryCancel.removeEventListener('click', onCancel)
+      ui.noEntryDialog.removeEventListener('close', onClose)
     }
   })
 }
@@ -915,11 +1028,26 @@ async function verifyContent (torrent, entry, key) {
     const relative = path.slice(manifest.root.length)
     if (relative === SIGNATURE_FILE) continue
 
+    // A file this browser cannot hold is not a file that failed its hash, and
+    // saying "broken" about one accuses an author of tampering over a limit
+    // that is ours. WebCrypto has no streaming digest, so describing a file
+    // means holding all of it: above that, the honest answer is that this site
+    // cannot be checked here, not that it is false.
+    if (file.length > MAX_HASHABLE_BYTES) {
+      return settle({
+        status: 'unverified',
+        reason: `${relative} is too large for this browser to check`
+      })
+    }
+
     let bytes
     try {
       bytes = new Uint8Array(await file.arrayBuffer())
     } catch (err) {
-      return settle({ status: 'broken', reason: `${relative} could not be read: ${err.message}` })
+      return settle({
+        status: 'unverified',
+        reason: `${relative} could not be read here: ${err.message}`
+      })
     }
 
     const check = await checkFile(result.manifest, relative, bytes)
@@ -1543,7 +1671,13 @@ function showListing (torrent) {
 
   ui.scripts.disabled = true
   ui.scriptsLabel.hidden = true
-  ui.keep.checked = false
+  // Asked rather than assumed. This used to run only on a fresh open, where
+  // "not kept" was true by construction; it is now also how the stage is put
+  // back after a publish is refused, and a reader who had kept the listing
+  // watched the tick disappear while the site stayed on disk.
+  isKept(torrent.infoHash).then(kept => {
+    if (current?.torrent === torrent) ui.keep.checked = kept
+  }).catch(() => {})
   ui.keepLabel.hidden = false
   ui.keep.disabled = false
   ui.saveTorrent.hidden = false
@@ -1697,45 +1831,188 @@ function wireDropTarget () {
     depth = 0
     highlight(false)
 
-    const { files, name } = await filesFromDrop(event.dataTransfer)
-    seed(files, name)
+    // A dropped archive is unpacked here, and unpacking can refuse: corrupt,
+    // encrypted, over a cap. Without this the rejection was unhandled and the
+    // page simply did nothing, which is the worst of the available answers.
+    try {
+      const { files, name } = await filesFromDrop(event.dataTransfer)
+      await seed(files, name)
+    } catch (err) {
+      failToPublish(err)
+    }
   })
 
-  ui.folder.addEventListener('change', () => {
-    const { files, name } = filesFromInput(ui.folder)
-    seed(files, name)
+  ui.folder.addEventListener('change', async () => {
+    const picked = [...ui.folder.files]
     ui.folder.value = '' // let the same folder be picked twice
+    // Awaited and caught like the other two. This one was left bare, and
+    // `verifiesAsItStands` now lets a read error through on purpose, so a file
+    // that became unreadable between being picked and being hashed made the
+    // page do nothing at all — the exact failure the other two were fixed for.
+    try {
+      const { files, name } = await filesFromInput({ files: picked })
+      await seed(files, name)
+    } catch (err) {
+      failToPublish(err)
+    }
+  })
+
+  ui.filesInput.addEventListener('change', async () => {
+    const picked = [...ui.filesInput.files]
+    ui.filesInput.value = ''
+    if (picked.length === 0) return
+
+    // Unpacking happens before `seed`, and can fail on its own terms — a
+    // damaged or refused archive is not a publishing error, it is an answer
+    // about this file, and it should read as one.
+    busy(picked.length === 1 && /\.zip$/i.test(picked[0].name)
+      ? `Opening ${picked[0].name}…`
+      : 'Reading…')
+    try {
+      const { files, name } = await filesFromPicker(picked)
+      await seed(files, name)
+    } catch (err) {
+      failToPublish(err)
+    }
   })
 }
 
 async function seed (files, name) {
   if (!ready) {
-    return fail(new Error('Spore is still starting up. Try that again in a moment.'))
+    return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
   }
 
-  // Checked before the publisher is asked anything. Being asked whether to
-  // sign a folder, and only then told it had no index.html, is a poor way to
-  // find out.
+  // One at a time. Drops are wired to the whole window and an open `<dialog>`
+  // does not make it inert, so a folder dropped on top of the signing question
+  // started a second publish — which called `showModal()` on a dialog that was
+  // already open, threw, and left the first publish waiting on a promise that
+  // could never settle. Both publishes also shared the dialog's buttons, so the
+  // answers could cross.
+  if (publishing) {
+    // The notice bar, not the error page: there is a dialog open, and replacing
+    // the page underneath it would be answering a transient collision by
+    // destroying what the person is in the middle of.
+    // The stage first: the picker calls `busy()` before it gets here, which
+    // hides the landing page, the listing and the error page alike. Saying "one
+    // is already on its way" over a blank screen is not an improvement on
+    // saying nothing.
+    restoreStage()
+    ui.notice.textContent =
+      'One publication is already on its way. Finish or cancel that one first.'
+    ui.notice.className = 'notice notice--error'
+    ui.notice.hidden = false
+    return
+  }
+  publishing = true
+  try {
+    await publishOne(files, name)
+  } finally {
+    publishing = false
+  }
+}
+
+/** Whether a publication is between its first question and its magnet. */
+let publishing = false
+
+async function publishOne (files, name) {
+
   try {
     checkPublishable(files)
   } catch (err) {
-    return fail(err)
+    return failToPublish(err)
   }
 
-  // Asked before anything is hashed, and before `busy()` — which hides the
-  // landing page, and with it the drop zone. A dialog raised over a hidden
-  // page would leave nothing to come back to if it were cancelled.
-  const decision = await askAboutSigning(name)
-  if (!decision) return
+  // Whatever an operating system left in the folder goes first, and goes here
+  // rather than inside the torrent library, so that the files being signed and
+  // the files being seeded are the same files.
+  const cleaned = dropJunk(files)
+  files = cleaned.files
+
+  // Asked again, because the set just changed. A folder holding nothing but a
+  // .DS_Store passed the check above and arrived at "Hashing 0 files…" with an
+  // empty dialog on the way, which is the late failure the early check exists
+  // to prevent.
+  if (files.length === 0) {
+    return failToPublish(new Error(
+      `There is nothing to publish: ${cleaned.dropped.join(', ')} ` +
+      `${cleaned.dropped.length === 1 ? 'is a file' : 'are files'} an operating ` +
+      'system writes into a folder, and there is nothing else here.'))
+  }
+
+  // One page picked on a phone becomes the site, because that is what the
+  // person meant.
+  const site = asSite(files)
+  files = site.files
+  name = name ?? site.name
+
+  const entry = entryFor(files)
+
+  // Not a refusal. Files with no `index.html` in their root publish perfectly
+  // well and render as a browsable list, which is occasionally the point — but
+  // it is rarely what somebody means by "my site", and this is the last moment
+  // before a magnet exists.
+  if (!entry && !await askAboutMissingEntry(files)) {
+    backOut()
+    return
+  }
+
+  // Two outcomes for a publication that arrives already signed, and no third.
+  // Either it verifies exactly as it stands — in which case it is republished
+  // untouched and stays its author's, which is what a mirror is — or its key
+  // and signature are thrown away and the publisher signs their own. Anything
+  // in between produces a site that accuses itself of having been altered.
+
+  // Said out loud, because this reads and hashes every file: republishing a
+  // large folder sat on an idle landing page for as long as it took, with
+  // nothing to show the click had done anything. Every other slow step here
+  // announces itself.
+  // A file too large to hold cannot be checked, signed, or judged stale — all
+  // three need its bytes. Such a site goes out exactly as it arrived, keeping
+  // whatever signature came with it, which is the honest outcome and still puts
+  // a film in a swarm.
+  const tooLargeToHash = files.some(file => file.size > MAX_HASHABLE_BYTES)
+
+  if (entry && !tooLargeToHash) busy('Checking the signature it came with…')
+  const mirror = entry && !tooLargeToHash ? await verifiesAsItStands(files) : false
+  if (entry && !mirror) ui.notice.hidden = true
+
+  const hadKey = !mirror && !tooLargeToHash &&
+    files.some(file => pathOf(file) === 'spore.pub')
+  if (!mirror && !tooLargeToHash) files = stripSignature(files)
+
+  // A manifest is one line per file, and a reader refuses one too large to be
+  // a manifest — it is reading a stranger's torrent. A site with thousands of
+  // files can make one, so the question is not asked where the answer could
+  // only produce a signature nobody will open.
+  const tooBigToSign = manifestWouldExceed(files.map(pathOf))
+
+  const decision = entry && !mirror && !tooBigToSign && !tooLargeToHash
+    ? await askAboutSigning(name)
+    : { sign: false, site: null }
+
+  if (!decision) {
+    backOut()
+    return
+  }
 
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {
     const signed = decision.sign
       ? await signContent(withSporePub(files, decision.site), decision.site)
       : files
+
     const torrent = await publish(signed, name)
     const magnet = magnetFor(torrent.infoHash, torrent.name)
     showShareLink(magnet)
+    noteWhatChanged({
+      renamed: site.renamed,
+      mirror,
+      dropped: cleaned.dropped,
+      discarded: hadKey && !decision.sign,
+      replaced: hadKey && decision.sign,
+      tooBigToSign: tooBigToSign && Boolean(entry) && !tooLargeToHash,
+      tooLargeToHash: tooLargeToHash && Boolean(entry)
+    })
 
     // Announced before navigating: navigating replaces the site on screen, and
     // this has to happen whether or not the reader stays to watch it.
@@ -1744,35 +2021,155 @@ async function seed (files, name) {
     navigate(magnet)
     if (successor) showSuccessorNote(successor)
   } catch (err) {
-    fail(err)
+    failToPublish(err)
   }
 }
 
 /**
- * Put the signed-in key in the folder, so the site names its own author.
+ * Does this publication already verify, exactly as it arrived?
  *
- * A folder that already carries a `spore.pub` is left exactly as it is. The
- * publisher may be re-publishing someone else's site, or deliberately shipping
- * a key other than the one in this tab, and silently overwriting it would
- * change who the site says it belongs to without saying so.
+ * Asked with the reader's own functions, deliberately. Every serious defect on
+ * this branch came from the publisher and the reader answering one question
+ * with two pieces of code; this is the same question, and there is one answer
+ * because there is one implementation.
+ */
+async function verifiesAsItStands (files) {
+  const at = path => files.find(file => pathOf(file) === path)
+
+  const pub = at('spore.pub')
+  const sig = at(SIGNATURE_FILE)
+  if (!pub || !sig) return false
+
+  // The reader's own limits, because this is the reader's own question. Without
+  // them a publication with an oversized key or manifest verified here and was
+  // republished untouched, while every reader — applying the limits — showed it
+  // as unsigned. One question answered twice, which is the whole family of
+  // defect this branch exists to remove.
+  if (pub.size > MAX_KEY_BYTES || sig.size > MAX_MANIFEST_BYTES) return false
+
+  let manifest
+  try {
+    const key = parseSporePub(await pub.text())
+    const result = await verifyManifest(await sig.text(), key.hex)
+    if (!result.ok) return false
+    manifest = result.manifest
+  } catch {
+    // Unreadable or malformed: this publication declares nothing usable, which
+    // is exactly how a reader treats it.
+    return false
+  }
+
+  const present = files.map(pathOf)
+
+  if (missingFrom(manifest, present).length > 0) return false
+  if (unlistedIn(manifest, present).length > 0) return false
+
+  // Deliberately outside the `try`. A file that cannot be *read* is not a
+  // signature that failed, and swallowing it here threw away a real author's
+  // key and told the publisher their site "arrived without a signature that
+  // stands up" — which would be a lie about somebody else's work. Let it
+  // propagate: a publish that cannot read its own files is not going to
+  // succeed a moment later either.
+  for (const file of files) {
+    const path = pathOf(file)
+    if (path === SIGNATURE_FILE) continue
+    if (!(await checkFile(manifest, path,
+      new Uint8Array(await file.arrayBuffer()))).ok) return false
+  }
+  return true
+}
+
+/**
+ * Say what the gate did to the files, beside the share link where it survives.
+ *
+ * Renaming a page and republishing somebody else's signature are both things
+ * the publisher did not ask for and would be entitled to be surprised by, and
+ * the notice bar is not the place: `busy()` overwrites it and rendering the
+ * site clears it, so a sentence put there appears and vanishes.
+ */
+function noteWhatChanged ({
+  renamed, mirror, dropped, discarded, replaced, tooBigToSign, tooLargeToHash
+}) {
+  const said = []
+
+  if (renamed) {
+    said.push(`${renamed.from} was published as index.html, so that it opens ` +
+      'as the site rather than as a list with one file in it.')
+  }
+  if (dropped.length > 0) {
+    said.push(`${dropped.join(', ')} ${dropped.length === 1 ? 'was' : 'were'} left ` +
+      'out: files an operating system writes into a folder, which are not part ' +
+      'of the site and cannot be signed as if they were.')
+  }
+  if (mirror) {
+    // Deliberately not "byte for byte": the files are untouched, but a
+    // torrent's name is part of its infohash and does not survive being picked
+    // out of one swarm and handed back through a file picker.
+    said.push('This was already signed, and it still verifies, so its files ' +
+      'went out untouched \u2014 still its author\u2019s, not yours.')
+  }
+  if (replaced) {
+    said.push('It arrived declaring somebody else\u2019s key, without a signature ' +
+      'that stands up to checking, so that key was replaced by yours. It is ' +
+      'published as your work, not theirs.')
+  }
+  if (discarded) {
+    said.push('It arrived declaring a key, without a signature that stands up ' +
+      'to checking, so the key was left out rather than published as a claim ' +
+      'nobody can verify.')
+  }
+
+  if (tooBigToSign) {
+    said.push('It has too many files to sign: the list of hashes would be ' +
+      'larger than a reader will open, so a signature would have gone out that ' +
+      'nobody could check. It is published unsigned instead.')
+  }
+
+  if (tooLargeToHash) {
+    said.push('It holds a file too large to hash here, so it was published ' +
+      'exactly as it arrived: not signed by you, and not stripped of anything ' +
+      'it came with. Describing a file means holding all of it at once, and ' +
+      'that one does not fit.')
+  }
+
+  ui.shareUnsigned.textContent = said.join(' ')
+  ui.shareUnsigned.hidden = said.length === 0
+}
+
+
+/**
+ * Put the signed-in key in the site's root, so the site names its own author.
+ *
+ * Nothing is left in place here. Anything the incoming files called `spore.pub`
+ * has already been thrown away by `stripSignature` unless it was part of a
+ * publication that verified as it stood, and a publication that verified was
+ * never handed to this function. So there is one key, it is this tab's, and it
+ * sits where every reader looks.
  */
 function withSporePub (files, site) {
   const identity = me()
   if (!identity) return files
 
-  const pathOf = file => file.fullPath || file.name
-  if (files.some(file => /(^|\/)spore\.pub$/i.test(pathOf(file)))) return files
-
-  // Beside the index, which is what readSporePub looks for: a key at the root
-  // of a torrent does not get to speak for a site in a subdirectory.
-  const index = files.find(file => /(^|\/)index\.html?$/i.test(pathOf(file)))
-  const path = pathOf(index ?? files[0])
-  const root = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
-
   const contents = formatSporePub(identity.hex, publicNameFor(identity.hex), site)
   const file = new File([contents], 'spore.pub', { type: 'text/plain' })
-  file.fullPath = `${root}spore.pub`
+  file.fullPath = 'spore.pub'
   return [...files, file]
+}
+
+/**
+ * Throw away a signature that is not going to be honoured.
+ *
+ * A signature belongs to a set of bytes, and these are about to stop being
+ * those bytes. Keeping somebody else's `spore.pub` while signing with this
+ * tab's key produces a site that reads as **altered** to every reader, and
+ * keeping a `spore.sig` that no longer matches produces the same thing. There
+ * are two outcomes for republishing and this is the second one: either a
+ * publication verifies exactly as it stands and is not touched at all, or its
+ * key and its signature go and the publisher's own take their place.
+ */
+function stripSignature (files) {
+  return files.filter(file =>
+    pathOf(file) !== 'spore.pub' && pathOf(file) !== SIGNATURE_FILE)
 }
 
 /**
@@ -1792,19 +2189,15 @@ async function signContent (files, site) {
   const identity = me()
   if (!identity) return files
 
-  const pathOf = file => file.fullPath || file.name
-  const index = files.find(file => /(^|\/)index\.html?$/i.test(pathOf(file)))
-  const anchorPath = pathOf(index ?? files[0])
-  const root = anchorPath.includes('/')
-    ? anchorPath.slice(0, anchorPath.lastIndexOf('/') + 1)
-    : ''
-
   const described = []
   for (const file of files) {
-    const full = pathOf(file)
-    const path = full.startsWith(root) ? full.slice(root.length) : full
+    const path = pathOf(file)
     if (path === SIGNATURE_FILE) continue
-    described.push({ path, bytes: new Uint8Array(await file.arrayBuffer()) })
+    // The File, not its bytes. `manifestEntries` reads one at a time and lets
+    // each go; reading them here held the whole site at once, which a site
+    // containing a film cannot survive — and which is precisely the ceiling
+    // this branch removed from the archive reader.
+    described.push({ path, bytes: file })
   }
 
   const contents = await signManifest(identity.privateKey, {
@@ -1812,8 +2205,14 @@ async function signContent (files, site) {
   })
 
   const signature = new File([contents], SIGNATURE_FILE, { type: 'text/plain' })
-  signature.fullPath = `${root}${SIGNATURE_FILE}`
-  return [...files, signature]
+  signature.fullPath = SIGNATURE_FILE
+
+  // The old one goes. Appending beside it put two files at one path, which is
+  // refused — so a site that had ever been signed could not be published again
+  // at all, and that is exactly the folder somebody re-publishes: the one they
+  // downloaded, or the one a seeder wrote its version of. A signature describes
+  // a set of bytes, and these are not those bytes.
+  return [...files.filter(file => pathOf(file) !== signature.fullPath), signature]
 }
 
 /**
@@ -1890,6 +2289,7 @@ function showSuccessorNote ({ site, reaching }) {
  */
 function showShareLink (magnet, justPublished = true) {
   ui.shareSuccessor.hidden = true
+  ui.shareUnsigned.hidden = true
 
   ui.shareIntro.innerHTML = justPublished
     ? '<strong>Published.</strong> Share this link — it works from any Spore mirror.'
@@ -2042,11 +2442,33 @@ function describe (error) {
       retry: false
     }
   }
+  if (error instanceof PublishFailed) {
+    return {
+      code: ':(',
+      title: 'That could not be published',
+      detail: error.message,
+      retry: false
+    }
+  }
   return {
     code: ':(',
     title: 'This site could not be opened',
     detail: error instanceof Error ? error.message : String(error),
     retry: true
+  }
+}
+
+/**
+ * A failure that happened on the way out rather than on the way in.
+ *
+ * Publishing and reading share an error page, and it used to say "this site
+ * could not be opened" over a refused archive — telling somebody who had just
+ * dropped a file that a site they never asked for had failed to load.
+ */
+class PublishFailed extends Error {
+  constructor (cause) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'PublishFailed'
   }
 }
 

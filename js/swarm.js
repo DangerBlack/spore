@@ -194,11 +194,31 @@ export async function openTorrent (magnetURI, onJoin = () => {}) {
  */
 export function seedTorrent (files, opts) {
   return new Promise((resolve, reject) => {
-    try {
-      getClient().seed(files, { announceList: DEFAULT_TRACKERS.map(t => [t]), ...opts }, resolve)
-    } catch (err) {
-      reject(err)
+    // Detached once the seed has settled. WebTorrent hands a torrent's error to
+    // the client only while the torrent itself has no listener, so leaving this
+    // one attached made every later failure of that torrent disappear into an
+    // already-resolved promise — the gate would go on showing a share link for
+    // a swarm that had stopped existing.
+    let torrent
+    const settle = seeded => {
+      seeded?.removeListener?.('error', reject)
+      torrent?.removeListener?.('error', reject)
+      resolve(seeded)
     }
+
+    try {
+      torrent = getClient().seed(
+        files, { announceList: DEFAULT_TRACKERS.map(t => [t]), ...opts }, settle)
+    } catch (err) {
+      return reject(err)
+    }
+
+    // A seed that fails asynchronously — a duplicate infohash, a store that
+    // will not write — used to leave this promise pending for the life of the
+    // tab. That stranded one publish; since publishing became one-at-a-time it
+    // would strand every publish after it too, with the gate insisting one was
+    // still on its way. A failure has to be an answer.
+    torrent?.once?.('error', reject)
   })
 }
 

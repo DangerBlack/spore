@@ -29,6 +29,62 @@ const CHROME = option('--chrome', process.env.CHROME ?? '/usr/bin/google-chrome'
 const SITE = 'example-site'
 const SITE_FILES = ['index.html', 'about.html', 'probe.js', 'css/site.css', 'css/leaf.svg']
 
+/** A .zip whose trailing comment contains the end-of-directory signature. */
+const COMMENTED_ZIP = 'UEsDBBQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAaW5kZXguaHRtbLPJMLRzzs/NTc0rSU2x0QfyAFBLAQIUAxQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAADoAAAAiAFBLBQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+
+/** A .zip carrying two entries at the same path, with different contents. */
+const DUPLICATE_PATHS = 'UEsDBBQAAAAIABqSLV2DkPvYDgAAAA4AAAAKAAAAaW5kZXguaHRtbLPJMLQrKMrMzbfRB7IAUEsDBBQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAaW5kZXguaHRtbLPJMLQrTk3Oz0vJt9EHsgFQSwECFAMUAAAACAAaki1dg5D72A4AAAAOAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLAQIUAxQAAAAIABqSLV2hhW+pEAAAABAAAAAKAAAAAAAAAAAAAACAATYAAABpbmRleC5odG1sUEsFBgAAAAACAAIAcAAAAG4AAAAAAA=='
+
+/**
+ * Archives that must be refused, with the reason each must be refused for.
+ *
+ * These are the security boundary of the archive reader, and until this table
+ * existed the browser check exercised exactly one valid archive: every refusal
+ * below could have been deleted and the suite would still have passed.
+ */
+const REFUSED_ARCHIVES = [
+  { name: 'TRAVERSAL', file: 'traversal.zip', because: 'points outside the archive', base64: 'UEsDBBQAAAAIAAOULV1b+fQWBgAAAAQAAAAQAAAALi4vLi4vZXRjL3Bhc3N3ZCvKzy8BAFBLAQIUAxQAAAAIAAOULV1b+fQWBgAAAAQAAAAQAAAAAAAAAAAAAACAAQAAAAAuLi8uLi9ldGMvcGFzc3dkUEsFBgAAAAABAAEAPgAAADQAAAAAAA==' },
+  { name: 'ABSOLUTE', file: 'absolute.zip', because: 'is an absolute path', base64: 'UEsDBBQAAAAIAAOULV2DFtyMAwAAAAEAAAALAAAAL2V0Yy9zaGFkb3erAABQSwECFAMUAAAACAADlC1dgxbcjAMAAAABAAAACwAAAAAAAAAAAAAAgAEAAAAAL2V0Yy9zaGFkb3dQSwUGAAAAAAEAAQA5AAAALAAAAAAA' },
+  { name: 'BACKSLASH', file: 'backslash.zip', because: 'uses backslashes', base64: 'UEsDBBQAAAAIAAOULV1ZcYfiCAAAAAYAAAANAAAAY3NzXHN0eWxlLmNzc0vKT6msrgUAUEsBAhQDFAAAAAgAA5QtXVlxh+IIAAAABgAAAA0AAAAAAAAAAAAAAIABAAAAAGNzc1xzdHlsZS5jc3NQSwUGAAAAAAEAAQA7AAAAMwAAAAAA' },
+  { name: 'SYMLINK', file: 'symlink.zip', because: 'is a symbolic link', base64: 'UEsDBBQAAAAAAAAAIQBjGzOSDAAAAAwAAAAJAAAAbGluay5odG1sLi4vLi4vc2VjcmV0UEsBAhQDFAAAAAAAAAAhAGMbM5IMAAAADAAAAAkAAAAAAAAAAAAAAP+hAAAAAGxpbmsuaHRtbFBLBQYAAAAAAQABADcAAAAzAAAAAAA=' },
+  { name: 'ENCRYPTED', file: 'encrypted.zip', because: 'is encrypted', base64: 'UEsDBBQAAAAIAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAEACAADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'CORRUPT', file: 'corrupt.zip', because: 'could not be decompressed', base64: 'UEsDBBQAAAAIAAOULV1khh0oGgAAABkAAAAKAAAAaW5kZXguaHRtbEzJMLRLTEpOSU1Lz8jMys7JzcsvsNEHCgIAUEsBAhQDFAAAAAgAA5QtXWSGHSgaAAAAGQAAAAoAAAAAAAAAAAAAAIABAAAAAGluZGV4Lmh0bWxQSwUGAAAAAAEAAQA4AAAAQgAAAAAA' },
+  { name: 'UNKNOWN_METHOD', file: 'unknown-method.zip', because: 'compression method Spore does not read', base64: 'UEsDBBQAAAAJAAOULV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACQADlC1dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'NOT_UTF8', file: 'not-utf8.zip', because: 'not UTF-8', base64: 'UEsDBBQAAAgIAPGYLV1SQcz9CgAAAAoAAAALAAAAaW5kZXj/Lmh0bWyzyTC0q7DRB5IAUEsBAhQDFAAACAgA8ZgtXVJBzP0KAAAACgAAAAsAAAAAAAAAAAAAAIABAAAAAGluZGV4/y5odG1sUEsFBgAAAAABAAEAOQAAADMAAAAAAA==' },
+  { name: 'NOT_A_ZIP', file: 'not-a-zip.zip', because: 'not a zip archive', base64: 'PGh0bWw+bm90IGFuIGFyY2hpdmUgYXQgYWxsPC9odG1sPg==' },
+  { name: 'DOT_SEGMENT', file: 'dot-segment.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAARAAAAc2l0ZS8uL2luZGV4Lmh0bWyzyTC0q7DRB5IAUEsBAhQDFAAAAAgAUpgtXVJBzP0KAAAACgAAABEAAAAAAAAAAAAAAIABAAAAAHNpdGUvLi9pbmRleC5odG1sUEsFBgAAAAABAAEAPwAAADkAAAAAAA==' },
+  { name: 'EMPTY_SEGMENT', file: 'empty-segment.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAQAAAAc2l0ZS8vaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAAEAAAAAAAAAAAAAAAgAEAAAAAc2l0ZS8vaW5kZXguaHRtbFBLBQYAAAAAAQABAD4AAAA4AAAAAAA=' },
+  { name: 'LEGACY_NAME', file: 'legacy-name.zip', because: 'legacy character set', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjDqS5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFKYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMOpLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
+  { name: 'C1_CONTROL', file: 'c1-control.zip', because: 'control characters', base64: 'UEsDBBQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAaW5kZXjCny5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAgIAGWYLV1SQcz9CgAAAAoAAAAMAAAAAAAAAAAAAACAAQAAAABpbmRleMKfLmh0bWxQSwUGAAAAAAEAAQA6AAAANAAAAAAA' },
+  { name: 'TRUNCATED_INDEX', file: 'truncated-index.zip', because: 'index is truncated', base64: 'UEsDBBQAAAAIAFKYLV1SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACABSmC1dUkHM/QoAAAAKAAAA9AEAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAAyAAAAAAA=' },
+  { name: 'TRAILING_DOT', file: 'trailing-dot.zip', because: 'is not a plain path', base64: 'UEsDBBQAAAAIAPebLV2DFtyMAwAAAAEAAAAGAAAAc2l0ZS8uqwAAUEsBAhQDFAAAAAgA95stXYMW3IwDAAAAAQAAAAYAAAAAAAAAAAAAAIABAAAAAHNpdGUvLlBLBQYAAAAAAQABADQAAAAnAAAAAAA=' },
+  { name: 'ZIP64', file: 'zip64.zip', because: 'zip64 format', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAAKAAAAaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAACgAAAAAAAAAAAAAAgAEAAAAAaW5kZXguaHRtbFBLBQYAAAAAAQABADgAAAD/////AAA=' },
+  { name: 'DRIVE_LETTER', file: 'drive-letter.zip', because: 'names a drive', base64: 'UEsDBBQAAAAIALdrL11SQcz9CgAAAAoAAAANAAAAQzovaW5kZXguaHRtbLPJMLSrsNEHkgBQSwECFAMUAAAACAC3ay9dUkHM/QoAAAAKAAAADQAAAAAAAAAAAAAAgAEAAAAAQzovaW5kZXguaHRtbFBLBQYAAAAAAQABADsAAAA1AAAAAAA=' },
+  { name: 'EXPANSION_BOMB', file: 'expansion-bomb.zip', because: 'expand more than 2000-fold', base64: 'UEsDBBQAAAAIAARxL12PXQ5eBgAAAGQAAAAKAAAAaW5kZXguaHRtbKuooD0AAFBLAQIUAxQAAAAIAARxL12PXQ5eBgAAAAAoa+4KAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAAC4AAAAAAA==' },
+  { name: 'TOO_MUCH_TO_HOLD', file: 'too-much-to-hold.zip', because: 'more than 256 MB of compressed files', base64: 'UEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDAuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDEuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDIuaHRtbGNgGAWjYBQMdwAAUEsDBBQAAAAIAARxL12AFwsGCwAAAOgDAAAHAAAAcDMuaHRtbGNgGAWjYBQMdwAAUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABAAAAAHAwLmh0bWxQSwECFAMUAAAACAAEcS9dgBcLBkBCDwCASl0FBwAAAAAAAAAAAAAAgAEwAAAAcDEuaHRtbFBLAQIUAxQAAAAIAARxL12AFwsGQEIPAIBKXQUHAAAAAAAAAAAAAACAAWAAAABwMi5odG1sUEsBAhQDFAAAAAgABHEvXYAXCwZAQg8AgEpdBQcAAAAAAAAAAAAAAIABkAAAAHAzLmh0bWxQSwUGAAAAAAQABADUAAAAwAAAAAAA' },
+  { name: 'PREFIXED', file: 'prefixed.zip', because: 'something in front of its index', base64: 'TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQSwMEFAAAAAgAUZwvXVJBzP0KAAAACgAAAAoAAABpbmRleC5odG1ss8kwtKuw0QeSAFBLAQIUAxQAAAAIAFGcL11SQcz9CgAAAAoAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAADIAAAAAAA==' }
+]
+
+/**
+ * A .zip whose central directory lists `nested/index.html` before `index.html`.
+ *
+ * Readers open the shallowest page; signing used to take the first one it found
+ * in array order, which an archive chooses.
+ */
+const ORDERED_ZIP = 'UEsDBBQAAAAIAPCVLV1qlh8DKAAAADMAAAARAAAAbmVzdGVkL2luZGV4Lmh0bWyzUUzJTy6pLEhVyCjJzbGzKcksyUm1y0stLklNsdGH8GwyDOEiQCYAUEsDBBQAAAAIAPCVLV20QKIBKwAAADUAAAAKAAAAaW5kZXguaHRtbLNRTMlPLqksSFXIKMnNsbMpySzJSbUrzkjMyckvt9GHcG0yDO2CYUJANgBQSwECFAMUAAAACADwlS1dapYfAygAAAAzAAAAEQAAAAAAAAAAAAAAgAEAAAAAbmVzdGVkL2luZGV4Lmh0bWxQSwECFAMUAAAACADwlS1dtECiASsAAAA1AAAACgAAAAAAAAAAAAAAgAFXAAAAaW5kZXguaHRtbFBLBQYAAAAAAgACAHcAAACqAAAAAAA='
+
+/**
+ * What macOS's own "Compress" produces: the folder, and `__MACOSX/` beside it.
+ *
+ * Two top levels, and the second one is not part of the site. Signing hashed it
+ * anyway while verification never looked there, so an ordinary Mac-made archive
+ * published a site that accused itself of having been altered.
+ */
+const MAC_STYLE_ZIP = 'UEsDBBQAAAAIAPebLV1MPnfMXAAAAGsAAAAPAAAAc2l0ZS9pbmRleC5odG1sLYsxDoMwEAS/4riHiC7F4R/wCMssOsSZIN+m4PcBJdWMRhp5zO/C80BQVktSwRyK5ubgGD9culdMwpWGVHOR50/F1n0LDTZG52lwBRiDNiz/0hf369QhTfd28QtQSwMEFAAAAAgA95stXRfKoaoXAAAAFQAAAA4AAABzaXRlL3N0eWxlLmNzc8swrE7Oz8kvsipKT9Kw1LE00LHUrAUAUEsDBBQAAAAIAPebLV1SI2NAFgAAABYAAAAaAAAAX19NQUNPU1gvc2l0ZS8uX2luZGV4Lmh0bWwrSi3OLy1KTlVIyy/KVsjLzytOBSIAUEsBAhQDFAAAAAgA95stXUw+d8xcAAAAawAAAA8AAAAAAAAAAAAAAIABAAAAAHNpdGUvaW5kZXguaHRtbFBLAQIUAxQAAAAIAPebLV0XyqGqFwAAABUAAAAOAAAAAAAAAAAAAACAAYkAAABzaXRlL3N0eWxlLmNzc1BLAQIUAxQAAAAIAPebLV1SI2NAFgAAABYAAAAaAAAAAAAAAAAAAACAAcwAAABfX01BQ09TWC9zaXRlLy5faW5kZXguaHRtbFBLBQYAAAAAAwADAMEAAAAaAQAAAAA='
+
+/** A .zip of a two-file site, for the picker check far below. */
+const ZIPPED_SITE = 'UEsDBBQAAAAIABuKLV3689fJZgAAAHcAAAAWAAAAemlwcGVkLXNpdGUvaW5kZXguaHRtbCWMQQ7CMAwEvxJ8h4obBye/4AFRupWjuiWKzaG8vgFuMyPt8mV+FT8agvimiTd4DkVyN3ikty/XByX26or0qa1h5ulvrHVfQ4dGMj8UJoBTkI4lUjGbfvU2aBzIPT33lsv63Q85AVBLAwQUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAHppcHBlZC1zaXRlL2Nzcy9zdHlsZS5jc3PLMKxOzs/JL7IqSk/SMDTSMTbRMTXTrAUAUEsBAhQDFAAAAAgAG4otXfrz18lmAAAAdwAAABYAAAAAAAAAAAAAAIABAAAAAHppcHBlZC1zaXRlL2luZGV4Lmh0bWxQSwECFAMUAAAACAAbii1dy2v6BhkAAAAXAAAAGQAAAAAAAAAAAAAAgAGaAAAAemlwcGVkLXNpdGUvY3NzL3N0eWxlLmNzc1BLBQYAAAAAAgACAIsAAADqAAAAAAA='
+
 let puppeteer
 try {
   puppeteer = (await import('puppeteer-core')).default
@@ -76,7 +132,7 @@ const browser = await puppeteer.launch({
 try {
   await run()
 } catch (err) {
-  console.error('\nThe check itself broke:', err.message)
+  console.error('\nThe check itself broke:', err.stack ?? err.message)
   results.push({ name: 'suite completed', pass: false })
 } finally {
   await browser.close()
@@ -298,6 +354,15 @@ async function run () {
 
   await checkKeepingOffline(page, infoHash)
   await checkPublishingByDrop(page)
+  await checkPublishingFromThePicker(page)
+  await checkSignatureLandsWhereReadersLook()
+  await checkAFolderCompressedOnAMac()
+  await checkRepublishing()
+  await checkEveryShapeAgrees()
+  await checkJunkRulesMatchTheLibrary()
+  await checkShapesNobodyChose()
+  await checkAnArchiveWithTooManyFiles()
+  await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -317,6 +382,1212 @@ async function run () {
   await checkReadersPassItOn()
   await checkWorkerIsPutBack()
   await checkSandboxProbe()
+}
+
+/**
+ * The other two ways in: an ordinary file picker, and a .zip through it.
+ *
+ * This is the path that exists on devices with no directory picker at all, so
+ * it is checked in a browser rather than reasoned about — and the archive is
+ * unpacked by the gate's own reader, with `DecompressionStream`, no library.
+ *
+ * It also pins down the rule that publishing and reading now share. The gate
+ * used to refuse to publish anything without an `index.html`, while the viewer
+ * was perfectly happy to render a lone page under any other name: it would not
+ * let you publish a site it could open. One page under any name publishes; a
+ * set with no entry asks first, because it renders as a list of files.
+ */
+
+async function checkPublishingFromThePicker (page) {
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  check('the landing page offers a file picker beside the folder one',
+    await page.$eval('#files-input', input => input.type === 'file' && input.multiple &&
+      !input.hasAttribute('webkitdirectory')))
+
+  // Measured at the width this runs at, because the phone check passed while
+  // the desktop layout had the two buttons overlapping by eight pixels: padding
+  // on an inline element paints outside its line box without making the line
+  // taller, which is invisible until there are two of them.
+  const pickers = await page.evaluate(() => [...document.querySelectorAll('.pick .button')]
+    .map(el => {
+      const box = el.getBoundingClientRect()
+      return { top: Math.round(box.top), bottom: Math.round(box.bottom), w: Math.round(box.width) }
+    }))
+  check('the two pickers are a column of equal buttons that do not touch',
+    pickers.length === 2 && pickers[1].top - pickers[0].bottom >= 4 &&
+    pickers[0].w === pickers[1].w, JSON.stringify(pickers))
+
+  // Reachable without a mouse. `hidden` on the input took both pickers out of
+  // the focus order entirely: the label is not focusable and a span is not a
+  // control, so a keyboard could not open either one and a screen reader was
+  // offered nothing to press.
+  const reachable = await page.evaluate(() => {
+    const out = []
+    for (const id of ['folder-input', 'files-input']) {
+      const input = document.getElementById(id)
+      input.focus()
+      const label = input.closest('label')
+      out.push({
+        id,
+        focused: document.activeElement === input,
+        named: (label?.textContent ?? '').trim().length > 0,
+        painted: getComputedStyle(label).outlineStyle !== 'none'
+      })
+    }
+    return out
+  })
+  check('both pickers can be reached and pressed without a mouse',
+    reachable.every(r => r.focused && r.named), JSON.stringify(reachable))
+  check('and focusing one is visible, since the label is what looks like a button',
+    reachable.every(r => r.painted), JSON.stringify(reachable))
+
+  // Every reader downloads the gate and most never publish anything, so the
+  // archive reader is meant to arrive only when an archive does. Checked rather
+  // than asserted in a comment, because a static import would satisfy every
+  // other check in this file while quietly making it a lie.
+  const loadedBefore = await page.evaluate(() => performance.getEntriesByType('resource')
+    .some(entry => entry.name.endsWith('/js/zip.js')))
+  check('the archive reader is not in a reader\u2019s module graph', !loadedBefore)
+
+  // --- a .zip, with a folder inside it --------------------------------------
+  const before = await page.$eval('#share-link', input => input.value)
+  await pick(page, [{ name: 'zipped-site.zip', type: 'application/zip', base64: ZIPPED_SITE }])
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  check('an archive is unpacked and reaches the signing question, like a folder', true)
+  await page.click('#signin-skip')
+
+  const link = await settled(page, before)
+  check('a .zip publishes and yields a shareable link',
+    link.includes('#magnet:?xt=urn:btih:') && link !== before, link.slice(0, 70))
+
+  const unpacked = await (await siteFrame(page)).evaluate(() => ({
+    heading: document.querySelector('h1')?.textContent,
+    colour: getComputedStyle(document.querySelector('h1')).color
+  }))
+  check('the unpacked site renders out of the swarm', unpacked.heading === 'Unpacked', unpacked.heading)
+  check('and it arrived the moment an archive did',
+    await page.evaluate(() => performance.getEntriesByType('resource')
+      .some(entry => entry.name.endsWith('/js/zip.js'))))
+  // The archive's root folder must be stripped exactly as a drop strips it, or
+  // `css/style.css` resolves one level too deep and the page loads unstyled.
+  check('a subdirectory inside the archive survives, so relative links resolve',
+    unpacked.colour === 'rgb(12, 34, 56)', unpacked.colour)
+
+  // --- one page, named whatever its author called it ------------------------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'il-mio-post.html', type: 'text/html', text: '<h1>Un post</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  check('a single page under any name publishes, as the viewer always rendered it',
+    !(await page.$eval('#no-entry-dialog', d => d.open)))
+  await page.click('#signin-skip')
+
+  await settled(page, '')
+  check('and it opens as the site, not as a file list',
+    await (await siteFrame(page)).evaluate(() => document.querySelector('h1')?.textContent) === 'Un post')
+
+  // --- an archive whose comment looks like the end of the archive -----------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const beforeComment = await page.$eval('#share-link', input => input.value)
+  await pick(page, [{ name: 'commented.zip', type: 'application/zip', base64: COMMENTED_ZIP }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.click('#signin-skip')
+  await settled(page, beforeComment)
+  check('a trailing comment containing the end-of-directory signature does not fool the reader',
+    await (await siteFrame(page)).evaluate(() => document.querySelector('h1')?.textContent) === 'Commented')
+
+  // --- two entries at one path ---------------------------------------------
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'duplicate.zip', type: 'application/zip', base64: DUPLICATE_PATHS }])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  const refused = await page.$eval('#error-detail', el => el.textContent)
+  // Not a layout complaint: spore.sig would list the path twice with two
+  // hashes, a verifier would check the first and the worker could serve the
+  // second, and the site would read as verified while showing unchecked bytes.
+  check('two entries at one path are refused before anything can be signed',
+    refused.includes('index.html twice'), refused.slice(0, 80))
+  check('and the signing question was never asked',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  // The same thing without an archive. A picker can be talked into handing over
+  // two files of one name, so the guard lives where every way in passes, not
+  // only in the zip reader.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>primo</h1>' },
+    { name: 'index.html', type: 'text/html', text: '<h1>secondo</h1>' }
+  ])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  check('and two picked files of one name are refused too, archive or not',
+    (await page.$eval('#error-detail', el => el.textContent)).includes('two files called index.html'))
+
+  // A refused publish leaves the error page up, and clearing an already-empty
+  // fragment fires no hashchange, so the way back is the button that is there
+  // for it. Clicking it is also the only way to know the button works.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('the way back from a refused archive is one click', true)
+
+  // --- everything the reader must refuse, and why ---------------------------
+  for (const archive of REFUSED_ARCHIVES) {
+    await page.click('#error-home').catch(() => {})
+    await page.evaluate(() => { location.hash = '' })
+    await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+    await pick(page, [{ name: archive.file, type: 'application/zip', base64: archive.base64 }])
+    await page.waitForFunction(
+      () => !document.getElementById('error').hidden, { timeout: 20_000 })
+
+    const said = await page.$eval('#error-detail', el => el.textContent)
+    check(`an archive is refused: ${archive.name.toLowerCase().replace(/_/g, ' ')}`,
+      said.includes(archive.because) &&
+      await page.$eval('#signin-dialog', d => !d.open),
+      said.slice(0, 70))
+  }
+
+  // --- a refused archive dropped rather than picked -------------------------
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const corrupt = REFUSED_ARCHIVES.find(a => a.name === 'CORRUPT')
+  await page.evaluate(b64 => {
+    const data = new DataTransfer()
+    data.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))],
+      'corrupt.zip', { type: 'application/zip' }))
+    document.body.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }))
+  }, corrupt.base64)
+  // The drop handler unpacks too, and that rejection used to go unhandled: the
+  // page did nothing at all, which is the worst of the available answers.
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  check('a refused archive says so when it is dropped, not only when it is picked',
+    (await page.$eval('#error-detail', el => el.textContent)).includes(corrupt.because))
+
+  // --- backing out of signing hands the screen back -------------------------
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'cancelled.html', type: 'text/html', text: '<h1>nope</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.click('#signin-cancel')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('cancelling the signing question gives the drop zone back',
+    await page.$eval('#notice', el => el.hidden))
+
+  // --- no entry page at all: a question, not a refusal ----------------------
+
+  await pick(page, [
+    { name: 'one.html', type: 'text/html', text: '<h1>one</h1>' },
+    { name: 'two.html', type: 'text/html', text: '<h1>two</h1>' }
+  ])
+  await page.waitForFunction(
+    () => document.getElementById('no-entry-dialog').open, { timeout: 20_000 })
+  check('files with no entry page raise a warning before anything is hashed', true)
+  check('the warning names the files it is talking about',
+    (await page.$eval('#no-entry-files', list => list.textContent)).includes('one.html'))
+
+  const unchanged = await page.$eval('#share-link', input => input.value)
+  await page.click('#no-entry-cancel')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  // Going back must cost nothing: no signature asked for, no torrent made, and
+  // the landing page — which is also the drop zone — back in reach.
+  await wait(1500)
+  const after = await page.evaluate(() => ({
+    signing: document.getElementById('signin-dialog').open,
+    welcome: !document.getElementById('welcome').hidden,
+    link: document.getElementById('share-link').value
+  }))
+  check('going back publishes nothing and leaves the drop zone in reach',
+    !after.signing && after.welcome && after.link === unchanged, JSON.stringify(after).slice(0, 90))
+
+  // --- and the other answer, which is a real thing to publish ---------------
+  await pick(page, [
+    { name: 'one.html', type: 'text/html', text: '<h1>one</h1>' },
+    { name: 'two.html', type: 'text/html', text: '<h1>two</h1>' }
+  ])
+  await page.waitForFunction(
+    () => document.getElementById('no-entry-dialog').open, { timeout: 20_000 })
+  await page.click('#no-entry-accept')
+
+  // Signing is not offered here, and that is the point: a reader's check reads
+  // the signature from beside the entry page, and there is none, so a signed
+  // file list would read as unsigned to everyone including its author.
+  await wait(1500)
+  check('a file list is not offered a signature nobody could check',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  await page.waitForFunction(
+    () => !document.getElementById('listing').hidden, { timeout: 40_000 })
+  const listed = await page.evaluate(() => ({
+    files: [...document.querySelectorAll('#listing-files a, #listing-files li')]
+      .map(el => el.textContent.trim()).join(' '),
+    summary: document.getElementById('listing-summary').textContent
+  }))
+  check('publishing it as a file list really produces one, and readers get it',
+    listed.files.includes('one.html') && listed.files.includes('two.html'),
+    JSON.stringify(listed).slice(0, 100))
+}
+
+/**
+ * Wait for a publish to land, and say what went wrong if it does not.
+ *
+ * A bare wait for the viewer reports "30000ms exceeded", which names the
+ * symptom and hides every cause. Publishing ends in one of three places, and
+ * two of them are on screen already.
+ */
+async function settled (page, before) {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const state = await page.evaluate(previous => {
+      const link = document.getElementById('share-link').value
+      const shown = !document.getElementById('share').hidden && link !== previous
+      const frame = document.getElementById('viewer')
+      if (shown && !frame.hidden && frame.src.includes('/webtorrent/')) return { link }
+
+      if (!document.getElementById('error').hidden) {
+        return {
+          failed: `${document.getElementById('error-title').textContent}: ` +
+            document.getElementById('error-detail').textContent
+        }
+      }
+      return null
+    }, before)
+
+    if (state?.failed) throw new Error(`publishing failed — ${state.failed}`)
+    if (state) return state.link
+    await wait(200)
+  }
+  const stuck = await page.evaluate(() => ({
+    notice: document.getElementById('notice').hidden ? null : document.getElementById('notice').textContent,
+    share: document.getElementById('share').hidden,
+    link: document.getElementById('share-link').value.slice(0, 70),
+    frame: document.getElementById('viewer').src.slice(0, 70),
+    listing: !document.getElementById('listing').hidden,
+    hash: location.hash.slice(0, 70)
+  }))
+  throw new Error(`publishing never settled — ${JSON.stringify(stuck)}`)
+}
+
+/** Put files into the ordinary picker the way a person would. */
+async function pick (page, files) {
+  await page.evaluate(async items => {
+    const data = new DataTransfer()
+    for (const item of items) {
+      const bytes = item.base64
+        ? Uint8Array.from(atob(item.base64), c => c.charCodeAt(0))
+        : item.text
+      data.items.add(new File([bytes], item.name, { type: item.type }))
+    }
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, files)
+}
+
+/**
+ * Where a signature is put has to match where a reader looks for it.
+ *
+ * `spore.pub` and `spore.sig` sit beside the entry page, and `readSporePub`
+ * derives that from the page the viewer actually opened — the shallowest
+ * `index.html`. Signing derived its own root separately, from the first
+ * `index.html` in array order, and an archive controls that order. The two
+ * agreed on every folder anyone had tried and disagreed on this one, which
+ * publishes a correctly signed site that reads as unsigned to everybody,
+ * its author included.
+ */
+async function checkSignatureLandsWhereReadersLook () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  await pick(page, [{ name: 'ordered.zip', type: 'application/zip', base64: ORDERED_ZIP }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  await page.type('#signin-label', 'Ordered')
+  await page.type('#signin-passphrase', 'a phrase long enough to be a real one')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'ordered')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const hash = /btih:([0-9a-f]{40})/.exec(link ?? '')?.[1]
+
+  const paths = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    return (await getClient().get(infoHash)).files.map(file => file.path)
+  }, hash)
+
+  const entry = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    const { findEntry } = await import('/js/site.js')
+    return findEntry(await getClient().get(infoHash))
+  }, hash)
+
+  const rootOf = path => path.slice(0, path.lastIndexOf('/') + 1)
+  const signature = paths.find(path => /spore\.pub$/.test(path))
+
+  check('the signature is written beside the page readers actually open',
+    signature && rootOf(signature) === rootOf(entry),
+    JSON.stringify({ entry, signature }))
+
+  // And the reader agrees, which is the thing that was broken: the key was
+  // present in the torrent and invisible to everyone.
+  const named = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    const { findEntry, readSporePub } = await import('/js/site.js')
+    const torrent = await getClient().get(infoHash)
+    return Boolean(await readSporePub(torrent, findEntry(torrent)))
+  }, hash)
+  check('so a reader opening it finds a key rather than "unsigned"', named)
+
+  await page.close()
+}
+
+/**
+ * A folder compressed on a Mac, which is two top levels rather than one.
+ *
+ * `__MACOSX/` is resource forks, not content, and macOS writes it beside
+ * anything its Compress command touches. Left in, the archive has no
+ * `index.html` in its root, so a folder compressed the ordinary way on the
+ * commonest desktop would open as a list of files instead of as a site. It is
+ * dropped by name — the one piece of rubbish common enough to earn a rule.
+ */
+async function checkAFolderCompressedOnAMac () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  await pick(page, [{ name: 'site.zip', type: 'application/zip', base64: MAC_STYLE_ZIP }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  await page.type('#signin-label', 'Mac')
+  await page.type('#signin-passphrase', 'another long enough phrase to sign with')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'mac')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const hash = /btih:([0-9a-f]{40})/.exec(link ?? '')?.[1]
+
+  const paths = await page.evaluate(async infoHash => {
+    const { getClient } = await import('/js/swarm.js')
+    return (await getClient().get(infoHash)).files.map(file => file.path)
+  }, hash)
+
+  check('a folder compressed on a Mac opens as a site, not as a list of files',
+    paths.some(path => /^[^/]+\/index\.html$/.test(path)), JSON.stringify(paths))
+  check('and the resource forks are not published with it',
+    !paths.some(path => path.includes('__MACOSX')), JSON.stringify(paths))
+
+  await page.waitForFunction(
+    () => !document.getElementById('author').hidden, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => document.getElementById('author').dataset.state !== 'checking', { timeout: 30_000 })
+  check('and it reads as verified, not as tampered with',
+    await page.$eval('#author', el => el.dataset.state) === 'verified',
+    await page.$eval('#author', el => el.dataset.state))
+
+  await page.close()
+}
+
+/**
+ * What the gate does with a publication that arrives already claiming an author.
+ *
+ * Two outcomes and no third: either it verifies exactly as it stands and is
+ * republished untouched — still its author's, which is what a mirror is — or
+ * its key and signature are thrown away and the publisher signs their own.
+ * Everything in between produced a site that accused itself of being altered.
+ */
+async function checkRepublishing () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  // --- the rules a site is held to, asked directly ---------------------------
+  // One rule, not a search: `index.html` in the site's root and nowhere else,
+  // and a single page becomes it whatever the author called it. What used to be
+  // here looked for the shallowest index.html anywhere in the tree, and that
+  // flexibility was where the publisher and the reader learned to disagree.
+  const rules = await page.evaluate(async () => {
+    const { asSite, entryFor } = await import('/js/site.js')
+    const file = path => Object.assign(new File(['x'], path.split('/').pop(),
+      { type: 'text/html' }), { fullPath: path })
+
+    const ask = paths => {
+      const site = asSite(paths.map(file))
+      return { entry: entryFor(site.files), renamed: site.renamed?.to ?? null }
+    }
+    return {
+      folder: ask(['site/index.html', 'site/css/a.css']),
+      onePage: ask(['il-mio-post.html']),
+      pageAndAsset: ask(['post.html', 'photo.jpg']),
+      nested: ask(['site/docs/index.html', 'site/a.css']),
+      wrapped: ask(['site/docs/index.html', 'site/docs/a.css']),
+      twoPages: ask(['one.html', 'two.html']),
+      twoFolders: ask(['site/index.html', 'other/x.txt'])
+    }
+  })
+
+  // Always bare: `asSite` has made every path relative to the site's root, which
+  // is what leaves `create-torrent` nothing to strip and therefore leaves the
+  // list that gets signed and the list that gets published identical.
+  check('a folder with index.html at its top is the site, at the top',
+    rules.folder.entry === 'index.html', JSON.stringify(rules.folder))
+  check('a single page becomes index.html, whatever it was called',
+    rules.onePage.entry === 'index.html' && rules.onePage.renamed === 'index.html',
+    JSON.stringify(rules.onePage))
+  check('and so does a page with its own images beside it',
+    rules.pageAndAsset.entry === 'index.html', JSON.stringify(rules.pageAndAsset))
+  // A folder that wraps *everything* comes off; one that wraps only the page
+  // does not, because a sibling is already at the root. So this is a list, and
+  // the reader agrees — which is the only thing that has to be true.
+  check('an index.html deeper than its siblings is not the entry',
+    rules.nested.entry === null, JSON.stringify(rules.nested))
+  check('but folders wrapping the whole site come off, however many',
+    rules.wrapped.entry === 'index.html', JSON.stringify(rules.wrapped))
+  check('two pages and no index is a list of files, not a guess',
+    rules.twoPages.entry === null, JSON.stringify(rules.twoPages))
+
+  // Two folders dropped at once. BitTorrent wraps them in a third, so the entry
+  // ends up two deep and the reader shows a list — and the publisher used to
+  // see an entry here and sign something nobody would ever check.
+  check('and two folders at once agree with what the reader will see: a list',
+    rules.twoFolders.entry === null, JSON.stringify(rules.twoFolders))
+
+  // --- a folder that was nothing but leftovers --------------------------------
+  // checkPublishable runs before the junk is dropped, so a folder holding only
+  // a .DS_Store used to pass it, reach an empty "there is no page" dialog, and
+  // fail at "Hashing 0 files…" — the late failure the early check exists to
+  // prevent.
+  await page.click('#error-home').catch(() => {})
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: '.DS_Store', type: 'application/octet-stream', text: 'Bud1' }])
+  await page.waitForFunction(
+    () => !document.getElementById('error').hidden, { timeout: 20_000 })
+  const onlyJunk = await page.$eval('#error-detail', el => el.textContent)
+  check('a folder that held nothing but leftovers says so at once',
+    onlyJunk.includes('.DS_Store') && onlyJunk.includes('nothing else here'),
+    onlyJunk.slice(0, 80))
+  check('and it never reached the signing question',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  // --- two publications at once -----------------------------------------------
+  // Drops are wired to the window and an open dialog does not make it inert, so
+  // a folder dropped onto the signing question started a second publish, called
+  // showModal on an already-open dialog, threw, and left the first waiting on a
+  // promise that could never settle.
+  await page.click('#error-home')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  await pick(page, [{ name: 'first.html', type: 'text/html', text: '<h1>first</h1>' }])
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(new File(['<h1>second</h1>'], 'index.html', { type: 'text/html' }))
+    document.body.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }))
+  })
+  await wait(800)
+
+  const both = await page.evaluate(() => ({
+    stillAsking: document.getElementById('signin-dialog').open,
+    told: document.getElementById('notice').hidden ? '' : document.getElementById('notice').textContent
+  }))
+  check('a second publication started over the first is refused, not tangled with it',
+    both.stillAsking && both.told.includes('already on its way'), JSON.stringify(both).slice(0, 90))
+
+  await page.click('#signin-dismiss')
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+  check('and the first one can still be answered afterwards',
+    await page.$eval('#signin-dialog', d => !d.open))
+
+  // --- the size a signature may be, agreed on both sides ---------------------
+  // The reader refuses a spore.sig too large to be one, because it is reading a
+  // stranger's torrent. The publisher has to refuse to make one, or an honest
+  // site with thousands of files goes out correctly signed and shows as
+  // unsigned to everybody, with nothing anywhere saying why. The old reader
+  // limit was half a megabyte, which a photo gallery passes.
+  const manifest = await page.evaluate(async () => {
+    const { manifestWouldExceed, MAX_MANIFEST_BYTES } = await import('/js/manifest.js')
+    const paths = (n, len) => Array.from({ length: n }, (_, i) => `p/${i}`.padEnd(len, 'x'))
+    return {
+      cap: MAX_MANIFEST_BYTES,
+      gallery: manifestWouldExceed(paths(5_000, 30)),
+      bigSite: manifestWouldExceed(paths(40_000, 22)),
+      absurd: manifestWouldExceed(paths(100_000, 20))
+    }
+  })
+  check('a site with thousands of files can still be signed',
+    !manifest.gallery && !manifest.bigSite, JSON.stringify(manifest))
+  check('and one whose signature no reader would open is not offered the chance',
+    manifest.absurd, JSON.stringify(manifest))
+
+  // The publisher's "does this already verify?" has to apply the reader's own
+  // limits, or it republishes untouched a site every reader shows as unsigned.
+  const limits = await page.evaluate(async () => {
+    const { MAX_KEY_BYTES } = await import('/js/identity.js')
+    const { MAX_MANIFEST_BYTES } = await import('/js/manifest.js')
+    const source = await (await fetch('/js/app.js')).text()
+    const fn = source.slice(source.indexOf('async function verifiesAsItStands'))
+      .slice(0, source.slice(source.indexOf('async function verifiesAsItStands')).indexOf('\n}\n'))
+    return {
+      key: MAX_KEY_BYTES,
+      manifest: MAX_MANIFEST_BYTES,
+      applied: fn.includes('MAX_KEY_BYTES') && fn.includes('MAX_MANIFEST_BYTES')
+    }
+  })
+  check('and the publisher weighs a signature by the reader\u2019s limits, not its own',
+    limits.applied && limits.key === 4096 && limits.manifest === 4_000_000,
+    JSON.stringify(limits))
+
+  // --- somebody else's key, without a signature that stands up ---------------
+  // Two outcomes and no third. This is the second one: the declaration does not
+  // verify, so it is thrown away and the publisher's own takes its place. The
+  // first outcome — a publication that verifies exactly as it arrived — is
+  // checked below, on a site this suite actually signed.
+  const theirKey = 'f'.repeat(64)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>a mirror</h1>' },
+    { name: 'spore.pub', type: 'text/plain', text: `${theirKey}\nname=Somebody Else\n` }
+  ])
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 20_000 })
+  await page.type('#signin-label', 'Mirroring')
+  await page.type('#signin-passphrase', 'a passphrase belonging to whoever mirrors')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 30_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 30_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'mirror')
+  await page.click('#signin-use-known')
+
+  const mirrored = await settled(page, '')
+  const declared = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const file = torrent.files.find(f => /spore\.pub$/.test(f.path))
+    return {
+      paths: torrent.files.map(f => f.path),
+      key: new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()))
+    }
+  }, mirrored)
+
+  check('a key that carries no signature that stands up is thrown away',
+    !declared.key.includes(theirKey), declared.key.split('\n')[0].slice(0, 20))
+  check('and the publisher signs it as their own instead',
+    declared.paths.some(path => /spore\.sig$/.test(path)), JSON.stringify(declared.paths))
+
+  // --- and the first outcome: a publication that still verifies ---------------
+  // Taken out of the torrent the check above just signed, and handed back in.
+  // This is the round trip a mirror is: nobody is asked for a passphrase,
+  // because the site is already somebody's and is not about to become anybody
+  // else's.
+  const theirs = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const out = []
+    for (const file of torrent.files) {
+      out.push({
+        name: file.path.slice(file.path.indexOf('/') + 1),
+        bytes: [...new Uint8Array(await file.arrayBuffer())]
+      })
+    }
+    return out
+  }, mirrored)
+
+  await page.evaluate(files => {
+    document.getElementById('share-unsigned').hidden = true
+    const data = new DataTransfer()
+    for (const file of files) {
+      data.items.add(new File([new Uint8Array(file.bytes)], file.name))
+    }
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, theirs)
+
+  // Not a new link: an identical one. A publication that is not touched hashes
+  // to what it hashed before, which is the strongest thing a mirror can say —
+  // the copy is the original, not a copy of it.
+  await page.waitForFunction(
+    () => !document.getElementById('share-unsigned').hidden, { timeout: 40_000 })
+
+  const untouched = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    const file = torrent.files.find(f => /spore\.pub$/.test(f.path))
+    return {
+      asked: document.getElementById('signin-dialog').open,
+      said: document.getElementById('share-unsigned').textContent,
+      link: document.getElementById('share-link').value,
+      key: new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()))
+    }
+  }, mirrored)
+
+  check('a publication that still verifies is republished without being asked about',
+    !untouched.asked, String(untouched.asked))
+  // Identical here because both publishes reach the torrent by the same route
+  // and so compute the same torrent name, which is part of the infohash. The
+  // files are what is guaranteed untouched; the hash follows only when the name
+  // does too.
+  check('and its files are untouched, so by this route it hashes the same',
+    untouched.link === mirrored, `${untouched.link.slice(-20)} vs ${mirrored.slice(-20)}`)
+  check('and it keeps the key it arrived with, rather than the publisher\u2019s',
+    untouched.key.split('\n')[0] === declared.key.split('\n')[0],
+    untouched.key.split('\n')[0].slice(0, 20))
+  check('and the publisher is told it stayed its author\u2019s',
+    untouched.said.includes('still its author'), untouched.said.slice(0, 60))
+
+  // --- a folder the Finder has touched ---------------------------------------
+  // `.DS_Store` sits in essentially every folder macOS has ever opened, and
+  // create-torrent drops it silently — after `spore.sig` has already hashed it.
+  // The manifest then described a file the torrent did not contain, and every
+  // reader, the author included, was told the site had been altered.
+  const withJunk = await page.$eval('#share-link', input => input.value)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>touched by finder</h1>' },
+    { name: '.DS_Store', type: 'application/octet-stream', text: 'Bud1\u0000junk' }
+  ])
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 20_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'finder')
+  await page.click('#signin-use-known')
+
+  const tidied = await settled(page, withJunk)
+  const kept = await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    return torrent.files.map(f => f.path)
+  }, tidied)
+  check('a folder the Finder has touched publishes without its leftovers',
+    !kept.some(path => path.includes('.DS_Store')), JSON.stringify(kept))
+
+  await page.waitForFunction(
+    () => !document.getElementById('author').hidden, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => document.getElementById('author').dataset.state !== 'checking', { timeout: 30_000 })
+  check('and it reads as verified rather than as tampered with',
+    await page.$eval('#author', el => el.dataset.state) === 'verified',
+    await page.$eval('#author', el => el.dataset.state))
+  check('and the publisher is told what was left out',
+    (await page.$eval('#share-unsigned', el => el.hidden ? '' : el.textContent)).includes('.DS_Store'))
+
+  // --- a site that has already been signed once ------------------------------
+  // The folder somebody re-publishes is the one they downloaded, or the one a
+  // seeder wrote its version into, and both carry a spore.sig. Signing appended
+  // a second one beside it, two files landed at one path, and the duplicate
+  // guard refused the whole publish: a site that had ever been signed could
+  // never be published again.
+  await page.evaluate(() => { location.hash = '' })
+  await page.waitForFunction(() => !document.getElementById('welcome').hidden, { timeout: 10_000 })
+
+  const beforeAgain = await page.$eval('#share-link', input => input.value)
+  await pick(page, [
+    { name: 'index.html', type: 'text/html', text: '<h1>again</h1>' },
+    { name: 'spore.sig', type: 'text/plain', text: 'spore-sig/1\nkey=' + 'a'.repeat(64) + '\nsig=b\n' }
+  ])
+  // This tab is signed in already, so the dialog opens at the step that asks
+  // which site this is, not at the one that asks who you are.
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 20_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'again')
+  await page.click('#signin-use-known')
+
+  // Waited for the link to *change*: a share panel left open by the publish
+  // before this one made "published" true before anything had happened, and the
+  // check then read the previous torrent and failed for the wrong reason.
+  let againLink = null
+  let refusedWhy = null
+  try {
+    againLink = await settled(page, beforeAgain)
+  } catch (err) {
+    refusedWhy = err.message
+  }
+  check('a site that was already signed can be published again',
+    Boolean(againLink), refusedWhy ?? '')
+  // The wording matters: a refused publish used to be announced as a site
+  // failing to open, to somebody who had not asked for a site.
+  if (refusedWhy) {
+    check('and a refused publish is described as a publish, not as a failed read',
+      !refusedWhy.includes('could not be opened'), refusedWhy.slice(0, 70))
+  }
+
+  const resigned = againLink === null ? [] : await page.evaluate(async link => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+    return torrent.files.map(f => f.path)
+  }, againLink)
+  check('and it carries one signature, not the old one and a new one',
+    resigned.filter(path => /spore\.sig$/.test(path)).length === 1, JSON.stringify(resigned))
+
+  await page.close()
+}
+
+/**
+ * The thing a BitTorrent client is for: something too big to hold.
+ *
+ * The reader used to read the whole archive with `arrayBuffer()` and then
+ * materialise every entry, so it needed a ceiling — and the ceiling was a
+ * number that would have refused a film, in a client whose own file listing
+ * exists so that "a video plays". The ceiling was covering an implementation,
+ * not protecting anybody: the folder and picker paths never had one, because
+ * WebTorrent reads a File from disk in pieces.
+ *
+ * A stored entry is the author's bytes verbatim, so it is handed over as a
+ * slice of the file on disk and never becomes memory. The archive built here is
+ * larger than every cap this branch ever carried.
+ */
+async function checkAnArchiveTooBigToHold () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 60_000 })
+
+  // Built in the page rather than shipped: seventy megabytes of base64 does not
+  // belong in a source file, and a stored zip is a header, the bytes, and an
+  // index, which is short enough to write here.
+  const built = await page.evaluate(async megabytes => {
+    const table = new Uint32Array(256)
+    for (let i = 0; i < 256; i++) {
+      let c = i
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+      table[i] = c >>> 0
+    }
+    const crc32 = bytes => {
+      let crc = 0xffffffff
+      for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+      return (crc ^ 0xffffffff) >>> 0
+    }
+
+    // Incompressible on purpose, which is also why a real mp4 is stored.
+    const movie = new Uint8Array(megabytes * 1024 * 1024)
+    for (let i = 0; i < movie.length; i++) movie[i] = (i * 2654435761) & 0xff
+
+    const page = new TextEncoder().encode(
+      '<!doctype html><meta charset="utf-8"><title>film</title><h1>Film</h1>')
+
+    const parts = []
+    const central = []
+    let offset = 0
+
+    for (const [name, bytes] of [['film/index.html', page], ['film/movie.mp4', movie]]) {
+      const nameBytes = new TextEncoder().encode(name)
+      const crc = crc32(bytes)
+
+      const local = new DataView(new ArrayBuffer(30))
+      local.setUint32(0, 0x04034b50, true)
+      local.setUint16(4, 20, true)
+      local.setUint16(8, 0, true) // stored
+      local.setUint32(14, crc, true)
+      local.setUint32(18, bytes.length, true)
+      local.setUint32(22, bytes.length, true)
+      local.setUint16(26, nameBytes.length, true)
+
+      const entry = new DataView(new ArrayBuffer(46))
+      entry.setUint32(0, 0x02014b50, true)
+      entry.setUint16(4, 20, true)
+      entry.setUint16(6, 20, true)
+      entry.setUint16(10, 0, true) // stored
+      entry.setUint32(16, crc, true)
+      entry.setUint32(20, bytes.length, true)
+      entry.setUint32(24, bytes.length, true)
+      entry.setUint16(28, nameBytes.length, true)
+      entry.setUint32(42, offset, true)
+
+      parts.push(new Uint8Array(local.buffer), nameBytes, bytes)
+      central.push(new Uint8Array(entry.buffer), nameBytes)
+      offset += 30 + nameBytes.length + bytes.length
+    }
+
+    const indexSize = central.reduce((sum, part) => sum + part.length, 0)
+    const end = new DataView(new ArrayBuffer(22))
+    end.setUint32(0, 0x06054b50, true)
+    end.setUint16(8, 2, true)
+    end.setUint16(10, 2, true)
+    end.setUint32(12, indexSize, true)
+    end.setUint32(16, offset, true)
+
+    const archive = new File([...parts, ...central, new Uint8Array(end.buffer)],
+      'film.zip', { type: 'application/zip' })
+
+    window.__film = archive
+    const { filesFromZip } = await import('/js/zip.js')
+    const unpacked = await filesFromZip(archive)
+    return {
+      archive: archive.size,
+      files: unpacked.files.map(file => ({ path: file.fullPath, size: file.size }))
+    }
+  }, 70)
+
+  const movie = built.files.find(file => file.path.endsWith('.mp4'))
+  check('an archive far larger than any cap this branch ever had is accepted',
+    built.archive > 70_000_000, `${Math.round(built.archive / 1e6)} MB`)
+  check('and the stored file comes out whole',
+    movie && movie.size === 70 * 1024 * 1024, JSON.stringify(built.files))
+
+  // And it can be signed, which is the half that was still false: signing read
+  // every file into memory at once to hash it, so a site with a film in it died
+  // during "Hashing 2 files…" — defeating the very ceiling this branch removed.
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(window.__film)
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  await page.waitForFunction(
+    () => document.getElementById('signin-dialog').open, { timeout: 60_000 })
+  await page.type('#signin-label', 'Film')
+  await page.type('#signin-passphrase', 'a passphrase for something with a film in it')
+  await page.click('#signin-continue')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-confirm').hidden, { timeout: 60_000 })
+  await page.click('#signin-use')
+  await page.waitForFunction(
+    () => !document.getElementById('signin-step-choose').hidden, { timeout: 60_000 })
+  await page.select('#signin-series', '\u0000new')
+  await page.type('#signin-new-series', 'film')
+  await page.click('#signin-use-known')
+
+  const link = await settled(page, '')
+  const seeded = await page.evaluate(async magnet => {
+    const { getClient } = await import('/js/swarm.js')
+    const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(magnet)[1])
+    return torrent.files.map(f => ({ path: f.path, length: f.length }))
+  }, link)
+
+  check('a site with a film in it can be signed without the tab dying',
+    seeded.some(f => f.path.endsWith('.mp4') && f.length === 70 * 1024 * 1024),
+    JSON.stringify(seeded.map(f => `${f.path} ${Math.round(f.length / 1e6)}MB`)))
+  check('and the signature covers it',
+    seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
+
+  // The other side of that limit: a reader must not call a site altered because
+  // one of its files is larger than this browser can hold. The publisher
+  // refuses to sign above MAX_HASHABLE_BYTES; the reader used to try anyway,
+  // fail the allocation, and report "broken" — accusing an author of tampering
+  // over a limit that is ours.
+  const verdicts = await page.evaluate(async () => {
+    const { MAX_HASHABLE_BYTES } = await import('/js/manifest.js')
+    const source = await (await fetch('/js/app.js')).text()
+    const from = source.indexOf('async function verifyContent')
+    const body = source.slice(from, from + source.slice(from).indexOf('\n}\n'))
+    return {
+      cap: MAX_HASHABLE_BYTES,
+      guarded: body.includes('MAX_HASHABLE_BYTES'),
+      accuses: /status: 'broken', reason: `\$\{relative\} could not be read/.test(body)
+    }
+  })
+  check('a file too large for this browser is unverifiable, not tampered with',
+    verdicts.guarded && !verdicts.accuses, JSON.stringify(verdicts))
+
+  await page.close()
+}
+
+/**
+ * Every shape of input, published for real, and the two answers compared.
+ *
+ * This is the branch's one real hazard written down as a table. The publisher
+ * decides what a site is before a torrent exists; the reader decides after,
+ * from paths BitTorrent has rearranged — it wraps a multi-file torrent in one
+ * folder, strips at most one shared level, and for a single file keeps only the
+ * basename. Every serious defect here was those two answers differing on a
+ * shape nobody had tried, so the shapes are tried.
+ */
+async function checkEveryShapeAgrees () {
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  await page.goto(origin + '/', { waitUntil: 'load' })
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+  const shapes = [
+    ['a folder', ['site/index.html', 'site/a.css'], 'site'],
+    ['a folder holding one file', ['site/index.html'], 'site'],
+    ['a page nested on its own', ['site/docs/index.html'], 'site'],
+    ['a page nested with a sibling', ['site/docs/index.html', 'site/docs/a.css'], 'site'],
+    ['loose files', ['index.html', 'a.css'], null],
+    ['one page', ['post.html'], null],
+    ['one page, nested', ['site/docs/post.html'], null],
+    ['two folders at once', ['site/index.html', 'other/x.txt'], null]
+  ]
+
+  const answers = await page.evaluate(async cases => {
+    const { publish } = await import('/js/publish.js')
+    const { asSite, entryFor, findEntry } = await import('/js/site.js')
+
+    const out = []
+    for (const [label, paths, folder] of cases) {
+      const files = paths.map(path => {
+        const file = new File(['x'], path.split('/').pop(), { type: 'text/html' })
+        file.fullPath = path
+        return file
+      })
+      const site = asSite(files)
+      const publisher = entryFor(site.files)
+      const torrent = await publish(site.files, folder ?? site.name)
+      out.push({ label, publisher, reader: findEntry(torrent) })
+    }
+    return out
+  }, shapes)
+
+  for (const answer of answers) {
+    check(`publisher and reader agree about ${answer.label}`,
+      Boolean(answer.publisher) === Boolean(answer.reader),
+      `${answer.publisher ?? 'a list'} / ${answer.reader ?? 'a list'}`)
+  }
+
+  await page.close()
+}
+
+/**
+ * Our two ideas of a junk file, against the library's two, on real input.
+ *
+ * `create-torrent` has two rules and applies them to two kinds of input. Handed
+ * a *list of files* it drops names that begin with a dot and match its list.
+ * Handed a *directory* it walks it, dropping every hidden entry and every name
+ * on the list whether or not it begins with a dot — and that one cannot be
+ * turned off, because `filterJunkFiles` never reaches a path.
+ *
+ * The gate hands over a list and the seeder hands over a directory, so both
+ * rules are copied and both have to be exact. Too broad and the torrent carries
+ * a file the signature never covered; too narrow and the signature covers a
+ * file the torrent never carried. Both read to a reader as tampering.
+ *
+ * Checked against the library itself rather than against the list it was copied
+ * from, because a copy verified only against its own origin is not verified.
+ */
+async function checkJunkRulesMatchTheLibrary () {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const createTorrent = (await import('create-torrent')).default
+  const { isJunkPath, skippedWhenWalking } =
+    await import(`file://${process.cwd()}/js/manifest.js`)
+
+  const names = [
+    'index.html', 'photo.jpg', '.DS_Store', '._preview.jpg', '.gitignore',
+    'Thumbs.db', '.hidden', 'npm-debug.log', '.swap.swp', 'desktop.ini'
+  ]
+  const build = opts => new Promise((resolve, reject) =>
+    createTorrent(opts.input, opts.options ?? {}, (err, buf) => err ? reject(err) : resolve(buf)))
+
+  // --- the rule for a directory, which is the seeder's ------------------------
+  const dir = await mkdtemp(join(tmpdir(), 'spore-junk-'))
+  try {
+    for (const name of names) await writeFile(join(dir, name), 'x')
+    const walked = new Set((await parseTorrentFile(await build({ input: dir })))
+      .files.map(file => file.path.split('/').slice(1).join('/')))
+
+    const wrong = names.filter(name => skippedWhenWalking(name) === walked.has(name))
+    check('the seeder skips exactly what the library skips walking a directory',
+      wrong.length === 0, wrong.length ? `disagreed about ${wrong.join(', ')}` : `${names.length} names`)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  // --- and the rule for a list of files, which is the gate's -------------------
+  const listed = names.map(name => {
+    const buffer = Buffer.from('x')
+    buffer.name = name
+    buffer.fullPath = `site/${name}`
+    return buffer
+  })
+  const inTorrent = new Set((await parseTorrentFile(await build({
+    input: listed, options: { name: 'site' }
+  }))).files.map(file => file.path.split('/').slice(1).join('/')))
+
+  const off = names.filter(name => isJunkPath(name) === inTorrent.has(name))
+  check('and the gate drops exactly what the library drops from a list',
+    off.length === 0, off.length ? `disagreed about ${off.join(', ')}` : `${names.length} names`)
+}
+
+/** parse-torrent, which is CommonJS-ish depending on the version. */
+async function parseTorrentFile (buffer) {
+  const mod = await import('parse-torrent')
+  return (mod.default ?? mod)(buffer)
+}
+
+/**
+ * The agreement, on shapes nobody chose.
+ *
+ * `checkEveryShapeAgrees` tries eight layouts I thought of, which is exactly the
+ * weakness every defect on this branch exploited: the publisher and the reader
+ * agreed on everything anyone had tried. This tries a hundred and twenty nobody
+ * tried, building each torrent for real so the comparison is against what
+ * `create-torrent` actually does rather than against my reading of it.
+ *
+ * Seeded, so a failure is reproducible: the seed is printed with the result.
+ */
+async function checkShapesNobodyChose () {
+  const createTorrent = (await import('create-torrent')).default
+  const { asSite, chooseEntry, entryFor } = await import(`file://${process.cwd()}/js/site.js`)
+
+  const seed = Number(process.env.SPORE_SHAPES_SEED ?? 20260915)
+  let state = seed
+  const random = () => (state = (state * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
+  const pick = list => list[Math.floor(random() * list.length)]
+
+  const folders = ['site', 'docs', 'a', 'b', 'assets']
+  const leaves = ['index.html', 'post.html', 'a.css', 'photo.jpg', 'notes.txt']
+  const shape = () => [...Array(Math.floor(random() * 3))]
+    .map(() => pick(folders)).concat(pick(leaves)).join('/')
+
+  const disagreed = []
+  for (let i = 0; i < 120; i++) {
+    const paths = [...new Set([...Array(1 + Math.floor(random() * 4))].map(shape))]
+    const files = paths.map(path => {
+      const file = new File(['x'], path.split('/').pop())
+      file.fullPath = path
+      return file
+    })
+
+    const site = asSite(files)
+    const publisher = entryFor(site.files)
+    const options = site.files.length === 1
+      ? { filterJunkFiles: false }
+      : { name: site.name ?? 'site', filterJunkFiles: false }
+
+    const torrent = await parseTorrentFile(await new Promise((resolve, reject) =>
+      createTorrent(site.files, options, (err, buf) => err ? reject(err) : resolve(buf))))
+    const reader = chooseEntry(torrent.files.map(file => file.path))
+
+    if (Boolean(publisher) !== Boolean(reader)) {
+      disagreed.push(`${JSON.stringify(paths)} -> ${publisher} / ${reader}`)
+    }
+  }
+
+  check('publisher and reader agree on a hundred and twenty shapes nobody chose',
+    disagreed.length === 0,
+    disagreed.length ? `seed ${seed}: ${disagreed[0]}` : `seed ${seed}`)
+}
+
+/**
+ * A real archive with more files in it than the reader will take.
+ *
+ * Built here rather than shipped, because a forged count is a different thing:
+ * an end record claiming forty thousand entries that holds one is simply a
+ * damaged archive, and refusing it as damaged is correct. What has to be
+ * refused *by name* is an archive that really does carry more files than a
+ * browser should turn into that many Files, torrent entries, manifest lines and
+ * rows in a list.
+ */
+async function checkAnArchiveWithTooManyFiles () {
+  const { filesFromZip, ZipError } =
+    await import(`file://${process.cwd()}/js/zip.js`)
+  const { ZIP_MAX_ENTRIES } = await import(`file://${process.cwd()}/js/config.js`)
+
+  const archive = storedZip([...Array(ZIP_MAX_ENTRIES + 500)]
+    .map((_, i) => [`f${i}.txt`, new TextEncoder().encode('x')]))
+
+  let refused = null
+  try {
+    await filesFromZip(new File([archive], 'many.zip', { type: 'application/zip' }))
+  } catch (err) {
+    refused = err
+  }
+  check('an archive really holding more files than the reader takes is refused by name',
+    refused instanceof ZipError && refused.message.includes(`more than ${ZIP_MAX_ENTRIES}`),
+    refused?.message?.slice(0, 70) ?? 'it was accepted')
+}
+
+/** A zip with every entry stored, which is all these checks need. */
+function storedZip (entries) {
+  const table = new Uint32Array(256)
+  for (let i = 0; i < 256; i++) {
+    let c = i
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    table[i] = c >>> 0
+  }
+  const crc32 = bytes => {
+    let crc = 0xffffffff
+    for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+    return (crc ^ 0xffffffff) >>> 0
+  }
+
+  const parts = []
+  const central = []
+  let offset = 0
+
+  for (const [name, bytes] of entries) {
+    const nameBytes = new TextEncoder().encode(name)
+    const crc = crc32(bytes)
+
+    const local = new DataView(new ArrayBuffer(30))
+    local.setUint32(0, 0x04034b50, true)
+    local.setUint16(4, 20, true)
+    local.setUint32(14, crc, true)
+    local.setUint32(18, bytes.length, true)
+    local.setUint32(22, bytes.length, true)
+    local.setUint16(26, nameBytes.length, true)
+
+    const record = new DataView(new ArrayBuffer(46))
+    record.setUint32(0, 0x02014b50, true)
+    record.setUint16(4, 20, true)
+    record.setUint16(6, 20, true)
+    record.setUint32(16, crc, true)
+    record.setUint32(20, bytes.length, true)
+    record.setUint32(24, bytes.length, true)
+    record.setUint16(28, nameBytes.length, true)
+    record.setUint32(42, offset, true)
+
+    parts.push(new Uint8Array(local.buffer), nameBytes, bytes)
+    central.push(new Uint8Array(record.buffer), nameBytes)
+    offset += 30 + nameBytes.length + bytes.length
+  }
+
+  const indexSize = central.reduce((sum, part) => sum + part.length, 0)
+  const end = new DataView(new ArrayBuffer(22))
+  end.setUint32(0, 0x06054b50, true)
+  end.setUint16(8, entries.length, true)
+  end.setUint16(10, entries.length, true)
+  end.setUint32(12, indexSize, true)
+  end.setUint32(16, offset, true)
+
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)])
 }
 
 /**
@@ -1303,8 +2574,17 @@ async function checkKeptSiteHearsUpdates () {
   await reader.waitForFunction(
     () => !document.getElementById('viewer').hidden, { timeout: 30_000 })
   await reader.click('#keep-toggle')
+  // The suite's one intermittent failure lives here, roughly one run in six,
+  // always this line. Not a timeout: puppeteer reports "Waiting failed" with no
+  // duration, which is a terminated execution context rather than an expired
+  // one — the page goes away underneath the wait. Raising the timeout did not
+  // stop it, which is the evidence for that reading. Keeping writes a whole
+  // torrent to IndexedDB in about the tenth browser context of a run, and
+  // another context is holding a seventy-megabyte film at the same time, so a
+  // renderer under memory pressure is the obvious suspect and is not yet a
+  // demonstrated one. Written down rather than explained away.
   await reader.waitForFunction(
-    () => !document.getElementById('kept').hidden, { timeout: 40_000 })
+    () => !document.getElementById('kept').hidden, { timeout: 120_000 })
 
   // Then throws the live torrent away, so reopening has to come off disk. That
   // is a reader coming back tomorrow, which is the case that was broken.
@@ -1547,7 +2827,8 @@ async function checkMobileLayout () {
 
     // Every dialog: inside the screen, with a gutter, and scrollable to its
     // buttons rather than running off the bottom.
-    for (const id of ['signin-dialog', 'author-dialog', 'diagnostics']) {
+    for (const id of ['signin-dialog', 'author-dialog', 'diagnostics',
+      'isolation-dialog', 'no-entry-dialog']) {
       const fit = await page.evaluate(dialogId => {
         if (dialogId === 'signin-dialog') {
           document.getElementById('signin-step-enter').hidden = false
@@ -1578,6 +2859,21 @@ async function checkMobileLayout () {
       check(`${id} fits a ${phone.name}, with its buttons reachable`,
         fit.gutter && fit.withinHeight && fit.lastButtonReachable, JSON.stringify(fit))
     }
+    // Both ways to choose files are pressed with a thumb here, and the folder
+    // picker is the one that does not work on the device this matters most on.
+    const buttons = await page.evaluate(() => {
+      document.getElementById('welcome').hidden = false
+      return [...document.querySelectorAll('.pick .button')].map(el => {
+        const box = el.getBoundingClientRect()
+        return { w: Math.round(box.width), h: Math.round(box.height), top: Math.round(box.top) }
+      })
+    })
+    check(`both pickers are full-width and stacked on a ${phone.name}`,
+      buttons.length === 2 &&
+      buttons.every(b => b.w > phone.width * 0.6 && b.h >= 40) &&
+      buttons[0].top !== buttons[1].top,
+      JSON.stringify(buttons))
+
     await page.close()
   }
 }

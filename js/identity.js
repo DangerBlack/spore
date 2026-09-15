@@ -114,6 +114,20 @@ export async function identityFromSeed (seed) {
 export const MAX_SITE_BYTES = 64
 
 /**
+ * How large a `spore.pub` may be, on both sides of the swarm.
+ *
+ * A key file is a line of hex and at most two more. This is read out of a
+ * stranger's torrent, so something far larger is not one, and decoding it to
+ * find that out would be the wrong order of operations.
+ *
+ * Exported because the publisher checks the same thing when it decides whether
+ * a publication already verifies. It used to apply neither this nor the
+ * manifest's limit, so it could conclude "this verifies, republish it
+ * untouched" about a site every reader would show as unsigned.
+ */
+export const MAX_KEY_BYTES = 4096
+
+/**
  * Parse the file a site uses to declare its author and which of that author's
  * sites it is.
  *

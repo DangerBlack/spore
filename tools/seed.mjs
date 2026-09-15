@@ -57,7 +57,9 @@ import { DEFAULT_TRACKERS } from '../js/config.js'
 import { formatSporePub, identityFromPassphrase, fingerprint, saltFor, normalizeSite }
   from '../js/identity.js'
 import { signUpdate } from '../js/record.js'
-import { SIGNATURE_FILE, manifestEntries, signManifest } from '../js/manifest.js'
+import {
+  MAX_HASHABLE_BYTES, SIGNATURE_FILE, manifestEntries, signManifest, skippedWhenWalking
+} from '../js/manifest.js'
 import { watchForUpdates } from '../js/updates.js'
 
 /* -------------------------------------------------------------------------- */
@@ -414,18 +416,50 @@ async function signContent (dir) {
   if (!identity) return
 
   const files = []
+  const oversized = []
   const walk = async current => {
     for (const entry of await readdir(current, { withFileTypes: true })) {
+      // Exactly what create-torrent skips while walking this same directory:
+      // every hidden entry and every name on the junk list, directories
+      // included. It does this whether or not it is asked to — `filterJunkFiles`
+      // only reaches a list of files, never a path — so hashing one of these
+      // here put a file in the signature that was never in the torrent, and
+      // every reader was told the site had been altered. Any directory that has
+      // been opened in the Finder has a `.DS_Store` in it.
+      if (skippedWhenWalking(entry.name)) continue
+
       const full = join(current, entry.name)
       if (entry.isDirectory()) await walk(full)
       else if (entry.isFile()) {
         const path = relative(dir, full).split(sep).join('/')
         if (path === SIGNATURE_FILE) continue
+
+        // The browser's limit, honoured here although node has no trouble with
+        // the file. A signature only means something if a reader can check it,
+        // and a reader is a browser with no streaming digest: signing a file no
+        // browser can hold produces a site that reads as unverifiable
+        // everywhere, for ever.
+        const { size } = await stat(full)
+        if (size > MAX_HASHABLE_BYTES) {
+          oversized.push({ path, size })
+          continue
+        }
+
         files.push({ path, bytes: new Uint8Array(await readFile(full)) })
       }
     }
   }
   await walk(dir)
+
+  if (oversized.length > 0) {
+    console.log(
+      `\nNot signing “${siteName}”: ${oversized.map(f => f.path).join(', ')} ` +
+      `${oversized.length === 1 ? 'is' : 'are'} larger than ` +
+      `${Math.round(MAX_HASHABLE_BYTES / 1e6)} MB, which is more than a browser ` +
+      'can hold to check a signature. It would be signed here and unverifiable ' +
+      'everywhere. The site is published unsigned.')
+    return
+  }
 
   const entries = await manifestEntries(files)
   const contents = await signManifest(identity.privateKey, {
