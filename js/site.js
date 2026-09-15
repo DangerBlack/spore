@@ -30,7 +30,7 @@
  */
 
 import { TORRENT_PATH } from './config.js'
-import { MAX_KEY_BYTES } from './identity.js'
+import { MAX_KEY_BYTES, parseSporePub } from './identity.js'
 import { MAX_MANIFEST_BYTES, isJunkPath } from './manifest.js'
 
 /** `index.html` directly inside the torrent's single root folder, or alone. */
@@ -203,7 +203,6 @@ export async function readSporePub (torrent, entryPath) {
 
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    const { parseSporePub } = await import('./identity.js')
     return parseSporePub(new TextDecoder().decode(bytes))
   } catch {
     // Unreadable or malformed: the site declares no usable key. Treated

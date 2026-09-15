@@ -8,7 +8,7 @@
  * takes the site offline — that is the honest limit of the MVP.
  */
 
-import { asSite, entryFor, pathOf } from './site.js'
+import { entryFor, pathOf } from './site.js'
 import { seedTorrent } from './swarm.js'
 
 /**

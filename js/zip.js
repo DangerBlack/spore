@@ -193,24 +193,30 @@ async function readCentralDirectory (blob) {
 
     if (path === '') throw new ZipError('That archive contains a file with no name.')
 
-    if (entry.flags & 0x1) throw new ZipError(`${path} is encrypted.`)
+    // Through `printable` from here down. These run before `checkPath`, which
+    // was the only place it was applied, so an entry that was both encrypted
+    // and had a control character in its name produced exactly the unmatchable
+    // message `printable` exists to prevent: a name the author cannot find.
+    const shown = printable(path)
+
+    if (entry.flags & 0x1) throw new ZipError(`${shown} is encrypted.`)
     if (entry.method !== STORED && entry.method !== DEFLATED) {
-      throw new ZipError(`${path} uses a compression method Spore does not read.`)
+      throw new ZipError(`${shown} uses a compression method Spore does not read.`)
     }
     if (entry.size === 0xffffffff || entry.compressed === 0xffffffff) {
-      throw new ZipError(`${path} is stored in zip64 format, which Spore does not read.`)
+      throw new ZipError(`${shown} is stored in zip64 format, which Spore does not read.`)
     }
     // What a bomb actually is: a ratio, not a size. Refused from the index, so
     // nothing is inflated to discover it. A floor, because a few hundred bytes
     // expanding from a handful is ordinary and means nothing.
     if (entry.size > 65_536 && entry.size > entry.compressed * ZIP_MAX_EXPANSION) {
-      throw new ZipError(`${path} claims to expand more than ${ZIP_MAX_EXPANSION}-fold.`)
+      throw new ZipError(`${shown} claims to expand more than ${ZIP_MAX_EXPANSION}-fold.`)
     }
     // A zip can carry unix mode bits. A symlink is a file whose contents are a
     // path, and following one is how an archive reaches something it does not
     // contain, so they are refused rather than dereferenced or flattened.
     if (((external >>> 16) & 0xf000) === 0xa000) {
-      throw new ZipError(`${path} is a symbolic link.`)
+      throw new ZipError(`${shown} is a symbolic link.`)
     }
 
     // Checked before directory records are dropped. They contribute no file, so
