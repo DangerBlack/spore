@@ -231,13 +231,24 @@ export function unlistedIn (manifest, presentPaths) {
 /**
  * Build the entry list for a set of files.
  *
- * @param {{path: string, bytes: Uint8Array}[]} files
+ * One file's bytes have to exist at once — WebCrypto has no streaming digest —
+ * so the largest file in a site still has to fit in memory. Everything else is
+ * released as it goes.
+ *
+ * @param {{path: string, bytes: Uint8Array|Blob}[]} files
  */
 export async function manifestEntries (files) {
   const entries = []
   for (const file of files) {
     if (EXCLUDED.has(file.path)) continue
-    const digest = await crypto.subtle.digest('SHA-256', file.bytes)
+
+    // A Blob is read here rather than by the caller, one file at a time. The
+    // caller used to read them all first and hand over an array of byte arrays,
+    // which meant holding an entire site in memory in order to describe it —
+    // and a site can hold a film. The peak is now the largest single file
+    // rather than the sum of all of them.
+    const bytes = file.bytes instanceof Blob ? await file.bytes.arrayBuffer() : file.bytes
+    const digest = await crypto.subtle.digest('SHA-256', bytes)
     entries.push({ path: file.path, hash: toHex(new Uint8Array(digest)) })
   }
   return entries.sort(byPath)
