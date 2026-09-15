@@ -26,7 +26,8 @@ import {
   avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
 } from './identity.js'
 import {
-  SIGNATURE_FILE, checkFile, manifestEntries, missingFrom, signManifest, unlistedIn, verifyManifest
+  SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed, missingFrom, signManifest,
+  unlistedIn, verifyManifest
 } from './manifest.js'
 import { entryURL, filePaths, findEntry, readManifest, readSporePub } from './site.js'
 import { SiteNotFound, getClient, openTorrent, startClient, startWorker } from './swarm.js'
@@ -1888,7 +1889,15 @@ async function seed (files, name) {
   const hadKey = !mirror && files.some(file => pathOf(file) === `${siteRoot(files)}spore.pub`)
   if (!mirror) files = stripSignature(files)
 
-  const decision = entry && !mirror
+  // A manifest is one line per file, and a reader refuses one too large to be
+  // a manifest — it is reading a stranger's torrent. A site with thousands of
+  // files can make one, so the question is not asked where the answer could
+  // only produce a signature nobody will open.
+  const root = siteRoot(files)
+  const tooBigToSign = manifestWouldExceed(
+    files.map(file => pathOf(file).slice(root.length)))
+
+  const decision = entry && !mirror && !tooBigToSign
     ? await askAboutSigning(name)
     : { sign: false, site: null }
 
@@ -1910,7 +1919,8 @@ async function seed (files, name) {
       renamed: site.renamed,
       mirror,
       dropped: cleaned.dropped,
-      discarded: hadKey && !decision.sign
+      discarded: hadKey && !decision.sign,
+      tooBigToSign: tooBigToSign && Boolean(entry)
     })
 
     // Announced before navigating: navigating replaces the site on screen, and
@@ -1976,7 +1986,7 @@ async function verifiesAsItStands (files, entry) {
  * the notice bar is not the place: `busy()` overwrites it and rendering the
  * site clears it, so a sentence put there appears and vanishes.
  */
-function noteWhatChanged ({ renamed, mirror, dropped, discarded }) {
+function noteWhatChanged ({ renamed, mirror, dropped, discarded, tooBigToSign }) {
   const said = []
 
   if (renamed) {
@@ -1999,6 +2009,12 @@ function noteWhatChanged ({ renamed, mirror, dropped, discarded }) {
     said.push('It arrived declaring a key, without a signature that stands up ' +
       'to checking, so the key was left out rather than published as a claim ' +
       'nobody can verify.')
+  }
+
+  if (tooBigToSign) {
+    said.push('It has too many files to sign: the list of hashes would be ' +
+      'larger than a reader will open, so a signature would have gone out that ' +
+      'nobody could check. It is published unsigned instead.')
   }
 
   ui.shareUnsigned.textContent = said.join(' ')

@@ -52,6 +52,41 @@ import { fromHex, toHex } from './bencode.js'
 
 export const SIGNATURE_FILE = 'spore.sig'
 
+/**
+ * How large a `spore.sig` may be, on both sides of the swarm.
+ *
+ * The reader needs a limit because it is reading a file out of a stranger's
+ * torrent: without one, a hostile site can put two gigabytes at this path and
+ * have every reader pull it down and hold it *before* any check has begun.
+ *
+ * The publisher needs the same limit for the opposite reason. A manifest is one
+ * line per file, so a large honest site can make one no reader will open — and
+ * the site then shows as unsigned, correctly signed, with nothing anywhere
+ * saying why. That was true here: the reader refused above half a megabyte and
+ * nothing on the publishing side had ever heard of the number.
+ *
+ * So there is one number, it lives beside the format it describes, and both
+ * ends import it. Four megabytes is roughly forty thousand files, which is far
+ * past anything a browser can publish and nothing beside the site it describes.
+ */
+export const MAX_MANIFEST_BYTES = 4_000_000
+
+/**
+ * Would signing these paths produce a manifest no reader will open?
+ *
+ * Answered from the paths alone, before anything is hashed, because the cost of
+ * a manifest is one line per file and a line is 64 hex characters, a space, the
+ * path and a newline. The header adds a hundred bytes or so; the margin here is
+ * thousands of files wide, so an estimate is the honest tool.
+ *
+ * @param {string[]} paths site-relative
+ */
+export function manifestWouldExceed (paths) {
+  const bytes = paths.reduce(
+    (total, path) => total + 66 + new TextEncoder().encode(path).length, 256)
+  return bytes > MAX_MANIFEST_BYTES
+}
+
 /** Files that describe the signature rather than being covered by it. */
 const EXCLUDED = new Set([SIGNATURE_FILE])
 
