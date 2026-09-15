@@ -8,6 +8,7 @@
  * takes the site offline — that is the honest limit of the MVP.
  */
 
+import { isJunkPath } from './manifest.js'
 import { seedTorrent } from './swarm.js'
 
 /**
@@ -202,38 +203,20 @@ export function pathOf (file) {
 }
 
 /**
- * Files an operating system left behind, which are not part of anybody's site.
+ * The same files, without what an operating system left among them.
  *
- * This list is `create-torrent`'s, copied deliberately rather than imported,
- * and the torrent is built with its own filtering turned **off** so that this
- * is the only place it happens. That matters more than it sounds: the library
- * used to drop these silently *after* `spore.sig` had already hashed them, so
- * the manifest described a file the torrent did not contain and every reader —
- * including the author — was told the site had been altered. A `.DS_Store` sits
- * in essentially every folder the Finder has ever opened.
+ * The rule lives in `manifest.js`, with the question it answers — what a
+ * signature covers — because the seeder needs the identical answer and
+ * `create-torrent` applies its own copy when handed a directory. The torrent is
+ * built here with the library's filtering **off**, so for this path there is
+ * exactly one filter and it is this one: the library used to drop these
+ * silently *after* `spore.sig` had hashed them, and every reader was told the
+ * site had been altered.
  *
- * Two filters that are nearly the same are worse than either one alone: too
- * broad and the torrent carries a file the signature never covered, too narrow
- * and the signature covers a file the torrent never carried. Both read as
- * tampering. So there is one, it is here, and `seedTorrent` is told not to have
- * an opinion.
+ * @param {File[]} files @returns {{files: File[], dropped: string[]}}
  */
-const JUNK = new RegExp([
-  '^npm-debug\\.log$', '^\\..*\\.swp$',
-  '^\\.DS_Store$', '^\\.AppleDouble$', '^\\.LSOverride$', '^Icon\\r$', '^\\._.*',
-  '^\\.Spotlight-V100(?:$|\\/)', '\\.Trashes', '^__MACOSX$',
-  '~$', '^Thumbs\\.db$', '^ehthumbs\\.db$', '^[Dd]esktop\\.ini$', '@eaDir$'
-].join('|'))
-
-/** @param {File[]} files @returns {{files: File[], dropped: string[]}} */
 export function dropJunk (files) {
-  const junk = file => {
-    const name = pathOf(file).split('/').pop()
-    // Both halves, exactly as create-torrent has it: a leading dot *and* a
-    // match. `Thumbs.db` is in the list and is not dropped, because it has no
-    // leading dot; matching only one half would put the two filters at odds.
-    return name.startsWith('.') && JUNK.test(name)
-  }
+  const junk = file => isJunkPath(pathOf(file))
   return {
     files: files.filter(file => !junk(file)),
     dropped: files.filter(junk).map(pathOf)
