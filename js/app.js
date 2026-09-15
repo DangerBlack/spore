@@ -23,11 +23,11 @@ import {
 } from './me.js'
 import { signUpdate } from './record.js'
 import {
-  avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
+  MAX_KEY_BYTES, avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
 } from './identity.js'
 import {
-  SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed, missingFrom, signManifest,
-  unlistedIn, verifyManifest
+  MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed, missingFrom,
+  signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
 import { entryURL, filePaths, findEntry, readManifest, readSporePub } from './site.js'
 import { SiteNotFound, getClient, openTorrent, startClient, startWorker } from './swarm.js'
@@ -1949,6 +1949,13 @@ async function verifiesAsItStands (files, entry) {
   const pub = at('spore.pub')
   const sig = at(SIGNATURE_FILE)
   if (!pub || !sig) return false
+
+  // The reader's own limits, because this is the reader's own question. Without
+  // them a publication with an oversized key or manifest verified here and was
+  // republished untouched, while every reader — applying the limits — showed it
+  // as unsigned. One question answered twice, which is the whole family of
+  // defect this branch exists to remove.
+  if (pub.size > MAX_KEY_BYTES || sig.size > MAX_MANIFEST_BYTES) return false
 
   try {
     const key = parseSporePub(await pub.text())
