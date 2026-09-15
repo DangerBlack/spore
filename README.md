@@ -142,9 +142,11 @@ The site is the entry page's folder and everything under it. An archive with a
 second top level — `__MACOSX/` beside your folder, say, which is what macOS
 produces — has that second part named and left out before anything is signed,
 because a reader can only check what sits beside the page they opened. And a
-folder that already declares somebody else's `spore.pub` is published as it is,
-signed by nobody: your signature over their declared key would read to every
-reader as the site having been altered. The files are hashed in your browser and never sent to a server. You get
+folder that already declares somebody else's `spore.pub` is published without
+being re-signed by you — if it carries their signature too, it stays verified
+under their key, which is what a faithful mirror should be. A signature from you
+beside a key that is not yours would read to every reader as the site having
+been altered. The files are hashed in your browser and never sent to a server. You get
 a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.

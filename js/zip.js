@@ -267,7 +267,9 @@ function checkPath (path) {
   // C0, DEL and C1. The stated rule is "no control characters", and a range
   // that stopped at DEL was not that rule.
   if (/[\u0000-\u001f\u007f-\u009f]/.test(path)) {
-    throw new ZipError('That archive contains a file name with control characters in it.')
+    // Named like every other refusal. This was the one that made the author
+    // guess which of their files needed fixing.
+    throw new ZipError(`${printable(path)} has control characters in its name.`)
   }
   return path
 }
@@ -292,10 +294,24 @@ function findEndRecord (bytes, view) {
   // coincidence in a comment.
   const from = Math.max(0, bytes.length - MAX_TRAILER)
   for (let at = bytes.length - 22; at >= from; at--) {
-    if (view.getUint32(at, true) === EOCD &&
-        view.getUint16(at + 20, true) === bytes.length - at - 22) {
-      return at
-    }
+    if (view.getUint32(at, true) !== EOCD) continue
+
+    // Two conditions, because the comment rule alone is a heuristic and this is
+    // a fact about the format. The comment follows the record, so a comment can
+    // contain a convincing forgery — including one whose length field happens
+    // to match the bytes after it. The directory it points at, though, has to
+    // end exactly where the record begins.
+    const commentFits = view.getUint16(at + 20, true) === bytes.length - at - 22
+    const offset = view.getUint32(at + 16, true)
+    const directoryEndsHere = offset + view.getUint32(at + 12, true) === at
+
+    // A zip64 archive puts a sentinel where that offset goes, so it can never
+    // satisfy the second condition — and refusing it here would tell its author
+    // "this is not a zip archive", which is both false and useless. It is
+    // recognised so that it can be refused by name a few lines further down.
+    const isZip64 = offset === 0xffffffff || view.getUint16(at + 10, true) === 0xffff
+
+    if (commentFits && (directoryEndsHere || isZip64)) return at
   }
   throw new ZipError('That file is not a zip archive, or it is damaged.')
 }
@@ -379,6 +395,12 @@ function sharedRoot (paths) {
 
   const root = paths[0].slice(0, cut + 1)
   return paths.every(path => path.startsWith(root)) ? root : null
+}
+
+/** A path safe to put in a message, with the unprintable parts shown as dots. */
+function printable (path) {
+  // eslint-disable-next-line no-control-regex
+  return path.replace(/[\u0000-\u001f\u007f-\u009f]/g, '·')
 }
 
 function basename (path) {

@@ -646,37 +646,56 @@ function askAboutSigning (what) {
 }
 
 /**
- * The key a set of files already declares for itself, if any.
+ * What a set of files already says about who published it.
  *
- * @returns {Promise<string|null>} the public key in hex
+ * Three answers, not two. "A file called `spore.pub` is here" is not the same
+ * question as "a key is declared here", and answering the first while meaning
+ * the second let a malformed declaration through: `withSporePub` left the
+ * unreadable file alone because the name was taken, signing wrote a signature
+ * for this tab's key beside it, and readers — who cannot parse it — saw a site
+ * that was unsigned and could never be updated.
+ *
+ * @returns {Promise<{present: boolean, hex: string|null}>}
  */
-async function keyDeclaredIn (files, root) {
-  const existing = files.find(file => (file.fullPath || file.name) === `${root}spore.pub`)
-  if (!existing) return null
+async function declarationIn (files, root) {
+  const existing = files.find(file => pathOf(file) === `${root}spore.pub`)
+  if (!existing) return { present: false, hex: null }
 
   try {
-    if (existing.size > 4096) return null
-    return parseSporePub(await existing.text())?.hex ?? null
+    // A key file is a couple of lines. Anything larger is not one, which is how
+    // `readSporePub` treats it too.
+    if (existing.size > 4096) return { present: true, hex: null }
+    return { present: true, hex: parseSporePub(await existing.text()).hex }
   } catch {
-    // A `spore.pub` nobody can read declares nothing, which is exactly how the
-    // reader treats it too.
-    return null
+    return { present: true, hex: null }
   }
 }
 
 /**
- * Said beside the share link, where it survives.
+ * Say why this tab did not sign, beside the share link, where it survives.
  *
  * Not in the notice bar: `busy()` overwrites it a moment later and rendering
  * the site clears it, so the one sentence explaining why nobody was asked for a
- * passphrase would appear and vanish. That is the same trap `showSuccessorNote`
+ * passphrase would appear and vanish. That is the trap `showSuccessorNote`
  * documents, and this is the same way out of it.
+ *
+ * Two shapes, because there are two truths. A folder carrying its author's own
+ * signature is republished **still verified by them** — a faithful mirror,
+ * which is the good outcome — and calling that "signed by nobody" was false in
+ * the direction that matters: it told a publisher their working mirror was not.
  */
-function noteForeignKey () {
-  ui.shareUnsigned.textContent =
-    'This folder already declares somebody else’s key, so it went out as it ' +
-    'is: published by you, signed by nobody. Signing it with your key would ' +
-    'have made every reader see it as altered.'
+function noteForeignKey ({ unreadable, kept }) {
+  const whose = unreadable
+    ? 'This folder declares a key that cannot be read'
+    : 'This folder already declares somebody else\u2019s key'
+
+  ui.shareUnsigned.textContent = kept
+    ? `${whose}, and carries the signature that goes with it. Both went out ` +
+      'untouched, so readers check it against that key rather than yours. A ' +
+      'signature from you beside a key that is not yours would read to every ' +
+      'reader as the site having been altered.'
+    : `${whose}, so it went out as it is: published by you, signed by nobody. ` +
+      'Signing it with your key would have made every reader see it as altered.'
   ui.shareUnsigned.hidden = false
 }
 
@@ -1912,7 +1931,7 @@ function wireDropTarget () {
 
 async function seed (files, name) {
   if (!ready) {
-    return fail(new Error('Spore is still starting up. Try that again in a moment.'))
+    return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
   }
 
   // Checked before the publisher is asked anything. Being asked whether to
@@ -1953,26 +1972,25 @@ async function seed (files, name) {
   // reads a mismatch as **broken**, meaning "altered", not "signed by someone
   // else". Republishing another person's site is a supported thing to do; it
   // simply cannot be signed by the person doing it.
-  const declared = await keyDeclaredIn(files, scoped.root)
+  const declaration = await declarationIn(files, scoped.root)
 
-  // Asked before anything is hashed, and before `busy()` — which hides the
-  // landing page, and with it the drop zone. A dialog raised over a hidden
-  // page would leave nothing to come back to if it were cancelled.
-  // Signing is not offered for a file list, because nothing would ever check
-  // it. A reader's check reads `spore.pub` and `spore.sig` from beside the
-  // entry page, and a listing has no entry page: the gate shows such a torrent
-  // as "unsigned" whatever it contains. Asking the question anyway would take a
-  // passphrase, write a real signature, and produce a site that reads as
-  // unsigned to everyone — including its author.
-  // Asked as a function, not as a value, because the signing dialog is where an
-  // identity usually arrives: reading `me()` once, before it, answered for a
-  // publisher who was already signed in and left everybody else unprotected —
-  // which is nearly everybody, the first time.
-  const signingOverSomeoneElse = () => Boolean(declared && me() && declared !== me().hex)
+  // A function rather than a value, because the signing dialog is where an
+  // identity usually arrives. Read once, before it, this answered for a
+  // publisher who was already signed in and left out everybody publishing for
+  // the first time — which is nearly everybody.
+  const cannotSign = () => declaration.present && Boolean(me()) && declaration.hex !== me().hex
 
-  const decision = entry && !signingOverSomeoneElse()
-    ? await askAboutSigning(name)
-    : { sign: false, site: null }
+  // Two cases where the question is not worth asking, and one where it is.
+  //
+  // A file list has no entry page, so no reader ever reads a signature for it:
+  // the gate shows such a torrent as "unsigned" whatever it holds, and asking
+  // would take a passphrase to write something nobody checks. A folder already
+  // declaring a key this tab does not hold cannot be signed either, for the
+  // reason above. Otherwise the question is asked here — before anything is
+  // hashed and before `busy()`, which hides the landing page and with it the
+  // drop zone, so a dialog raised any later would have nothing to return to.
+  const asked = Boolean(entry) && !cannotSign()
+  const decision = asked ? await askAboutSigning(name) : { sign: false, site: null }
   if (!decision) {
     // Backing out must hand the screen back. The picker path hides the landing
     // page — which is also the drop zone — before this question is asked, and
@@ -1983,10 +2001,11 @@ async function seed (files, name) {
     return
   }
 
-  // Only worth saying when they asked for it: somebody who chose to publish
-  // unsigned does not need to be told their unsigned site is unsigned.
-  const refused = decision.sign && signingOverSomeoneElse()
-  const sign = decision.sign && !refused
+  // Said in both shapes, because there are two ways to decline and only silence
+  // is wrong: skipped before the question, or withdrawn after it. Somebody who
+  // chose "publish unsigned" for themselves is told nothing, having decided.
+  const declined = Boolean(entry) && cannotSign() && (!asked || decision.sign)
+  const sign = decision.sign && !declined
 
   busy(`Hashing ${files.length} file${files.length === 1 ? '' : 's'}…`)
   try {
@@ -1996,7 +2015,12 @@ async function seed (files, name) {
     const torrent = await publish(signed, name)
     const magnet = magnetFor(torrent.infoHash, torrent.name)
     showShareLink(magnet)
-    if (refused) noteForeignKey()
+    if (declined) {
+      noteForeignKey({
+        unreadable: declaration.hex === null,
+        kept: files.some(file => pathOf(file) === `${rootFor(files)}${SIGNATURE_FILE}`)
+      })
+    }
 
     // Announced before navigating: navigating replaces the site on screen, and
     // this has to happen whether or not the reader stays to watch it.
