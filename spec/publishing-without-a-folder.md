@@ -263,9 +263,15 @@ Deferred until wanted: the editor of Option B, in its narrow form only.
 2. **Does the iOS file picker accept a `.zip` from the Files app**, and does
    `accept=".zip,application/zip"` help or hinder it? Some iOS versions have
    been restrictive about extensions; measure rather than assume.
-3. **What are the caps?** Total uncompressed size and per-entry size have to be
-   numbers. They should come from what a browser can hold and seed without
-   dying, which is a measurement, not a preference.
+3. **What are the caps?** Partly answered, and the first answer was wrong. There
+   is no limit on how large a published site may be, and there must not be: this
+   is a BitTorrent client and people will put films in it. The byte ceilings
+   that were here were covering an implementation — a reader that held the whole
+   archive and every entry in memory — rather than protecting anybody, and the
+   folder and picker paths never had one. A stored entry is handed to the swarm
+   as a slice of the file on disk and never becomes memory, so only what
+   actually inflates is counted. What remains a guess is *that* number, and the
+   bomb ratio beside it.
 4. **Preview before publishing?** A zip from elsewhere is unreviewed content,
    and publishing is signing. Seeding it locally and opening it in the ordinary
    viewer before announcing would show the author the real thing, through the

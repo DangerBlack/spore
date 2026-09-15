@@ -125,8 +125,11 @@ Three ways in, because a folder cannot always be chosen:
 
 - **Drop a folder**, or pick one — the fastest path where it exists.
 - **Pick a `.zip`** of that folder. It is unpacked in your browser, with no
-  library: a zip is a folder that fits through an ordinary file picker, which
-  on some devices is the only picker there is. iOS appears to offer no folder
+  library, and never held whole: files stored without compression — video,
+  audio, anything already compressed — are handed to the swarm straight out of
+  the archive, so size is no more a limit here than for a dropped folder. A zip
+  is a folder that fits through an ordinary file picker, which on some devices
+  is the only picker there is. iOS appears to offer no folder
   picker at all — reported, not yet confirmed on a device, so the folder button
   is still offered everywhere and this is the way round it if it is missing.
 - **Pick a page and its files.** A picker reports no relative paths, so
