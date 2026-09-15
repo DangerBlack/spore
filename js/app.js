@@ -1028,11 +1028,26 @@ async function verifyContent (torrent, entry, key) {
     const relative = path.slice(manifest.root.length)
     if (relative === SIGNATURE_FILE) continue
 
+    // A file this browser cannot hold is not a file that failed its hash, and
+    // saying "broken" about one accuses an author of tampering over a limit
+    // that is ours. WebCrypto has no streaming digest, so describing a file
+    // means holding all of it: above that, the honest answer is that this site
+    // cannot be checked here, not that it is false.
+    if (file.length > MAX_HASHABLE_BYTES) {
+      return settle({
+        status: 'unverified',
+        reason: `${relative} is too large for this browser to check`
+      })
+    }
+
     let bytes
     try {
       bytes = new Uint8Array(await file.arrayBuffer())
     } catch (err) {
-      return settle({ status: 'broken', reason: `${relative} could not be read: ${err.message}` })
+      return settle({
+        status: 'unverified',
+        reason: `${relative} could not be read here: ${err.message}`
+      })
     }
 
     const check = await checkFile(result.manifest, relative, bytes)
