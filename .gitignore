@@ -10,3 +10,6 @@ deploy/seeder/data/
 
 # Seeder configuration, including the signing passphrase.
 deploy/seeder/.env
+
+# Stray bytecode from scratchpad tooling run inside the repo.
+__pycache__/
