@@ -1307,6 +1307,19 @@ async function checkAnArchiveTooBigToHold () {
   check('and the signature covers it',
     seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
 
+  // The half that matters, and the one the suite was missing: a reader checking
+  // it. Seventy-three megabytes is past the size the platform's digest takes in
+  // one go, so this verdict is reached by streaming the film out of the torrent
+  // through our own hash — the path that did not exist an hour ago, and the one
+  // that used to make a gate tell an author their film had been altered.
+  await page.waitForFunction(
+    () => !document.getElementById('author').hidden, { timeout: 60_000 })
+  await page.waitForFunction(
+    () => document.getElementById('author').dataset.state !== 'checking', { timeout: 120_000 })
+  check('and a reader checks the film itself, streaming it, and says verified',
+    await page.$eval('#author', el => el.dataset.state) === 'verified',
+    await page.$eval('#author', el => el.dataset.state))
+
   // The other side of it: there is no size at which a reader stops being able
   // to check a site. A file larger than the platform's digest will take is
   // streamed through our own, so a verdict of "altered" can never come from a
