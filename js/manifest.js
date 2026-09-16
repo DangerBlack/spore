@@ -107,16 +107,24 @@ export async function digestOf (source) {
 /**
  * Would signing these paths produce a manifest no reader will open?
  *
- * Answered from the paths alone, before anything is hashed, because the cost of
- * a manifest is one line per file and a line is 64 hex characters, a space, the
- * path and a newline. The header adds a hundred bytes or so; the margin here is
- * thousands of files wide, so an estimate is the honest tool.
+ * Answered from the paths alone, before anything is hashed: a manifest is one
+ * line per file, and a line is 64 hex characters, a space, the path and a
+ * newline.
+ *
+ * The allowance for everything else was 256 bytes and that was not enough. The
+ * header is `spore-sig/1`, a `key=` line of 69, a `site=` line of up to 70 and
+ * a `sig=` line of 93 — about 244 — and the caller adds a `spore.pub` line
+ * *after* asking. Fifty-two thousand short paths therefore passed this and
+ * produced a signature of 4,000,033 bytes against a limit of four million:
+ * signed, and refused by every reader on size, which is the exact failure this
+ * function exists to prevent. The allowance is 400 now, and the caller counts
+ * the key file it is about to add.
  *
  * @param {string[]} paths site-relative
  */
 export function manifestWouldExceed (paths) {
   const bytes = paths.reduce(
-    (total, path) => total + 66 + new TextEncoder().encode(path).length, 256)
+    (total, path) => total + 66 + new TextEncoder().encode(path).length, 400)
   return bytes > MAX_MANIFEST_BYTES
 }
 

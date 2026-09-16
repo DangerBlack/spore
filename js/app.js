@@ -6,7 +6,7 @@
  * to whichever host is serving this bundle.
  */
 
-import { TORRENT_PATH } from './config.js'
+import { TORRENT_PATH, VERIFY_WITHOUT_ASKING_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
@@ -706,7 +706,7 @@ function listItems (paths, limit = 12) {
 /**
  * Tell an author their files will open as a list, and let them go back.
  *
- * Deliberately a question and not an error: `chooseEntry` is the same rule the
+ * Deliberately a question and not an error: `entryFor` is the same rule the
  * viewer uses, so this is Spore reporting what a reader will actually land on,
  * which is a thing the author is in a position to change and nobody else is.
  *
@@ -1007,6 +1007,22 @@ async function verifyContent (torrent, entry, key) {
 
   const result = await verifyManifest(manifest.contents, key.hex)
   if (!result.ok) return settle({ status: 'broken', reason: result.reason })
+
+  // Checking means hashing, and hashing means downloading. Since the digest
+  // learned to stream, nothing stops this from pulling a four-gigabyte film off
+  // the swarm in the background to fill in a chip — so there is a budget, and
+  // above it the honest answer is that the site was not checked here rather
+  // than a quiet hour of someone else's bandwidth.
+  const weight = torrent.files
+    .filter(file => file.path.replace(/\\/g, '/').startsWith(manifest.root))
+    .reduce((total, file) => total + file.length, 0)
+
+  if (weight > VERIFY_WITHOUT_ASKING_BYTES) {
+    return settle({
+      status: 'unverified',
+      reason: `checking this would download ${formatBytes(weight)} of it`
+    })
+  }
 
   const present = filePaths(torrent, manifest.root)
   const extra = unlistedIn(result.manifest, present)
@@ -1837,6 +1853,15 @@ function wireDropTarget () {
   ui.folder.addEventListener('change', async () => {
     const picked = [...ui.folder.files]
     ui.folder.value = '' // let the same folder be picked twice
+    if (picked.length === 0) return
+
+    // This one unpacks archives too, since `webkitdirectory` degrades to a file
+    // picker where directories cannot be chosen — and on that device this is
+    // the first button. Silence through inflating and checking a hundred
+    // megabytes is the failure the other picker was fixed for.
+    busy(picked.length === 1 && /\.zip$/i.test(picked[0].name)
+      ? `Opening ${picked[0].name}…`
+      : 'Reading…')
     // Awaited and caught like the other two. This one was left bare, and
     // `verifiesAsItStands` now lets a read error through on purpose, so a file
     // that became unreadable between being picked and being hashed made the
@@ -1943,10 +1968,6 @@ async function publishOne (files, name) {
   // well and render as a browsable list, which is occasionally the point — but
   // it is rarely what somebody means by "my site", and this is the last moment
   // before a magnet exists.
-  if (!entry && !await askAboutMissingEntry(files)) {
-    backOut()
-    return
-  }
 
   // Two outcomes for a publication that arrives already signed, and no third.
   // Either it verifies exactly as it stands — in which case it is republished
@@ -1965,11 +1986,22 @@ async function publishOne (files, name) {
   const hadKey = !mirror && files.some(file => pathOf(file) === 'spore.pub')
   if (!mirror) files = stripSignature(files)
 
+  // Asked after the signature has gone, so the list of what readers will browse
+  // does not name two files that are not going to be published — directly above
+  // a paragraph explaining that this goes out unsigned.
+  if (!entry && !await askAboutMissingEntry(files)) {
+    backOut()
+    return
+  }
+
   // A manifest is one line per file, and a reader refuses one too large to be
   // a manifest — it is reading a stranger's torrent. A site with thousands of
   // files can make one, so the question is not asked where the answer could
   // only produce a signature nobody will open.
-  const tooBigToSign = manifestWouldExceed(files.map(pathOf))
+  // Counting the key file too, because signing adds one and the check that
+  // fits without it may not fit with it.
+  const tooBigToSign = manifestWouldExceed(
+    [...files.map(pathOf), 'spore.pub', SIGNATURE_FILE])
 
   const decision = entry && !mirror && !tooBigToSign
     ? await askAboutSigning(name)

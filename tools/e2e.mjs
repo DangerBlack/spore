@@ -960,6 +960,41 @@ async function checkRepublishing () {
   check('and one whose signature no reader would open is not offered the chance',
     manifest.absurd, JSON.stringify(manifest))
 
+  // The arithmetic, at its own boundary. The estimate allowed 256 bytes for the
+  // header and the real one is up to 244, and the caller adds a `spore.pub`
+  // line after asking — so fifty-odd thousand short paths passed the check and
+  // produced a signature a hair over four million, which every reader refuses
+  // on size. Signed, and silently unsigned. What has to hold is not "the
+  // estimate is close" but "the estimate is never optimistic".
+  const boundary = await page.evaluate(async () => {
+    const { manifestWouldExceed, signManifest, MAX_MANIFEST_BYTES } =
+      await import('/js/manifest.js')
+    const { identityFromPassphrase } = await import('/js/identity.js')
+    const me = await identityFromPassphrase('a passphrase for the boundary check')
+
+    const fits = n => !manifestWouldExceed(
+      [...Array.from({ length: n }, (_, i) => `p/${i}`), 'spore.pub', 'spore.sig'])
+
+    let low = 1000
+    let high = 200_000
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (fits(mid)) low = mid + 1; else high = mid
+    }
+
+    const paths = Array.from({ length: low - 1 }, (_, i) => `p/${i}`).concat('spore.pub')
+    const signature = await signManifest(me.privateKey, {
+      key: me.hex,
+      site: 's'.repeat(60), // the longest series name the format allows for
+      entries: paths.map(path => ({ path, hash: 'a'.repeat(64) }))
+    })
+    return { accepted: low - 1, bytes: signature.length, cap: MAX_MANIFEST_BYTES }
+  })
+
+  check('the largest set the gate will sign really does fit what a reader reads',
+    boundary.bytes <= boundary.cap,
+    `${boundary.accepted} files -> ${boundary.bytes} of ${boundary.cap}`)
+
   // The publisher's "does this already verify?" has to apply the reader's own
   // limits, or it republishes untouched a site every reader shows as unsigned.
   const limits = await page.evaluate(async () => {
@@ -1336,6 +1371,19 @@ async function checkAnArchiveTooBigToHold () {
   check('a file too large for one buffer is streamed, not refused or blamed',
     verdicts.hasNoCap && verdicts.neverAccuses, JSON.stringify(verdicts))
 
+  // And the cost of that: since the digest learned to stream, nothing stopped
+  // verification from pulling a four-gigabyte film off the swarm in the
+  // background to fill in a chip. A weak check, structural rather than
+  // behavioural, because building a torrent past the budget costs more than the
+  // check is worth — but it fails if the budget is ever taken out again.
+  const budgeted = await page.evaluate(async () => {
+    const source = await (await fetch('/js/app.js')).text()
+    const from = source.indexOf('async function verifyContent')
+    return source.slice(from, from + source.slice(from).indexOf('\n}\n'))
+      .includes('VERIFY_WITHOUT_ASKING_BYTES')
+  })
+  check('and checking a signature has a bandwidth budget of its own', budgeted)
+
   await page.close()
 }
 
@@ -1475,7 +1523,7 @@ async function parseTorrentFile (buffer) {
  */
 async function checkShapesNobodyChose () {
   const createTorrent = (await import('create-torrent')).default
-  const { asSite, chooseEntry, entryFor } = await import(`file://${process.cwd()}/js/site.js`)
+  const { asSite, entryFor, findEntry } = await import(`file://${process.cwd()}/js/site.js`)
 
   const seed = Number(process.env.SPORE_SHAPES_SEED ?? 20260915)
   let state = seed
@@ -1504,7 +1552,11 @@ async function checkShapesNobodyChose () {
 
     const torrent = await parseTorrentFile(await new Promise((resolve, reject) =>
       createTorrent(site.files, options, (err, buf) => err ? reject(err) : resolve(buf))))
-    const reader = chooseEntry(torrent.files.map(file => file.path))
+    // Through `findEntry`, which is the function the viewer itself calls, on a
+    // torrent-shaped object. The rule underneath is not exported: a second
+    // entry rule reachable from outside is the thing most likely to be picked
+    // up by mistake later.
+    const reader = findEntry({ files: torrent.files.map(file => ({ path: file.path })) })
 
     if (Boolean(publisher) !== Boolean(reader)) {
       disagreed.push(`${JSON.stringify(paths)} -> ${publisher} / ${reader}`)
