@@ -15,15 +15,19 @@ out with relative paths. That is a reasonable demand of a developer at a desk
 and an unreasonable one of everybody else — and on a phone it is not a demand
 at all, it is a wall:
 
-> **To confirm on a real device before anything is built.** iOS Safari (and
-> every other iOS browser, since they are all WebKit) appears to offer no
-> directory picker at all: `<input webkitdirectory>` falls back to picking
-> single files, and there is no drag-and-drop of a folder. If that holds,
-> publishing from an iPhone is impossible, and no amount of layout work on the
-> "Choose a folder…" button changes it.
+A folder is the one thing not every way in can express. Dragging one needs a
+pointer and a window. `<input webkitdirectory>` needs a browser that implements
+it, and degrades silently to picking single files where it does not. Picking
+loose files always works and reports no relative paths, so everything lands at
+the root and `css/style.css` cannot be said at all.
 
-So: some way for a site to arrive that is not a folder. Three were considered,
-and they are not equivalent — one of them is mostly already built.
+The point is not any one device. It is that **whoever is publishing should be
+able to hand the site over in whatever form they have it** — the folder, an
+archive of it, or the page alone — rather than being told which shape their work
+must arrive in by whichever picker their browser happens to implement.
+
+So: more than one way for a site to arrive. Three were considered, and they are
+not equivalent — one of them is mostly already built.
 
 ## What is not changing
 
@@ -58,8 +62,8 @@ refuses to publish something it is perfectly happy to read:
 
 That asymmetry is the whole bug. Removing it means making the publish rule the
 same rule the read path already uses, and adding one input without
-`webkitdirectory` — which is the plain file picker that *does* work on iOS,
-reaching Files, iCloud Drive and every other document provider.
+`webkitdirectory` — the plain file picker, which every browser has and which
+reaches whatever document providers the machine offers.
 
 Nothing is renamed and nothing is rewritten. The page keeps the name its author
 gave it, in the torrent and in the magnet's `dn=`, because the reader already
@@ -135,10 +139,10 @@ Two details to get right rather than assume:
 
 **Recommended.**
 
-A zip is a folder that fits through a file picker. On iOS, `<input type="file">`
-reaches the Files app, iCloud Drive, Dropbox and anything else with a document
-provider; the folder picker that does not exist is the only thing missing, and a
-zip routes around exactly that gap and nothing else.
+A zip is a folder that fits through a file picker — and a file picker is the one
+way in that every browser has. Where a folder picker is missing, or awkward, or
+simply not what somebody has to hand, an archive is how a folder travels through
+the door that is always open.
 
 What makes this the better option is not convenience, it is that **it is not a
 new pillar**. CLAUDE.md says the MVP does two things and that anything else is
@@ -210,8 +214,10 @@ The case against it is the one raised while planning it, and it is convincing:
   the gate. An editor is dead weight for everyone who only ever reads, and the
   gate's claim to be a small bundle anybody can re-host is not decoration — it
   is how the project survives losing a host.
-- **It is a third pillar**, and the justification for adding one rests on the
-  iOS claim at the top of this document. A zip reader needs no such exception.
+- **It is a third pillar.** CLAUDE.md says the MVP does two things and that
+  anything else must not be built "even if it is easy". Accepting more than one
+  shape of input is the second thing with more than one door; a writing tool
+  inside a reading gate would be a new thing, and would have to argue for it.
 - **It becomes the second way to do everything.** Every later feature acquires
   an editor half and a folder half, and they drift.
 - **It requires an opinion about writing.** Where a zip accepts whatever any
@@ -228,8 +234,8 @@ it ever gets larger than that in the planning, it is the wrong thing.
 
 **S1 — a single page, and flat sets of files. Done.** Make the publish rule the read
 rule, add a picker without `webkitdirectory`. Almost nothing to write, and it
-covers the commonest thing anyone publishes. It is also the smallest possible
-test of whether the iOS wall is really where this document claims it is.
+covers the commonest thing anyone publishes: one page, with or without a couple
+of files beside it.
 
 **Z1 — accept a zip. Done.** For everything with a subdirectory in it, which a file
 picker can never express. The reader unpacks in memory and the entries go to
@@ -265,11 +271,15 @@ Deferred until wanted: the editor of Option B, in its narrow form only.
 
 ## Open questions
 
-1. **Is the iOS folder picker really absent?** Everything here rests on it. One
-   test on a real iPhone settles it, and it should be run before Z1 starts.
-2. **Does the iOS file picker accept a `.zip` from the Files app**, and does
-   `accept=".zip,application/zip"` help or hinder it? Some iOS versions have
-   been restrictive about extensions; measure rather than assume.
+1. ~~**Is the folder picker really absent on some devices?**~~ Withdrawn, and
+   it should never have been question one. Whether a particular browser
+   implements a particular attribute does not decide whether a publisher should
+   be able to choose how their site arrives. Three ways in are worth having
+   everywhere, and none of them waits on a measurement.
+2. **Does a file picker accept a `.zip` everywhere?** Some platforms have been
+   restrictive about extensions, and `accept=".zip,application/zip"` can help or
+   hinder depending on the version. Worth knowing wherever somebody finds it
+   refused; not worth guessing at in advance.
 3. **What are the caps?** Partly answered, and the first two answers were both
    wrong. There is no limit on how large a published site may be, and there must
    not be: this is a BitTorrent client and people will put films in it.

@@ -49,12 +49,11 @@ export async function filesFromDrop (dataTransfer) {
  * Files chosen through `<input type="file" webkitdirectory>`.
  *
  * Which is not always a folder. `webkitdirectory` degrades to an ordinary file
- * picker where directories cannot be chosen — iOS, the device this whole path
- * exists for — and a person there taps "Choose a folder…" because it is the
- * first button, picks `site.zip`, and used to get a one-file torrent containing
- * an archive and a dialog saying there was no page to open. The drop handler and
- * the other picker both unpack; the button an iOS user is most likely to press
- * was the one that did not.
+ * picker wherever directories cannot be chosen, and it degrades silently — so
+ * somebody taps "Choose a folder…" because it is the first button, picks
+ * `site.zip`, and used to get a one-file torrent containing an archive and a
+ * dialog saying there was no page to open. The drop handler and the other
+ * picker both unpack; the first button was the one that did not.
  */
 export async function filesFromInput (input) {
   const files = [...input.files]
