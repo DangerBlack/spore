@@ -50,7 +50,7 @@
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { chown, cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, openAsBlob } from 'node:fs'
 import { basename, join, relative, resolve, sep } from 'node:path'
 
 import { DEFAULT_TRACKERS } from '../js/config.js'
@@ -58,7 +58,7 @@ import { formatSporePub, identityFromPassphrase, fingerprint, saltFor, normalize
   from '../js/identity.js'
 import { signUpdate } from '../js/record.js'
 import {
-  MAX_HASHABLE_BYTES, SIGNATURE_FILE, manifestEntries, signManifest, skippedWhenWalking
+  SIGNATURE_FILE, manifestEntries, signManifest, skippedWhenWalking
 } from '../js/manifest.js'
 import { watchForUpdates } from '../js/updates.js'
 
@@ -416,7 +416,6 @@ async function signContent (dir) {
   if (!identity) return
 
   const files = []
-  const oversized = []
   const walk = async current => {
     for (const entry of await readdir(current, { withFileTypes: true })) {
       // Exactly what create-torrent skips while walking this same directory:
@@ -434,32 +433,15 @@ async function signContent (dir) {
         const path = relative(dir, full).split(sep).join('/')
         if (path === SIGNATURE_FILE) continue
 
-        // The browser's limit, honoured here although node has no trouble with
-        // the file. A signature only means something if a reader can check it,
-        // and a reader is a browser with no streaming digest: signing a file no
-        // browser can hold produces a site that reads as unverifiable
-        // everywhere, for ever.
-        const { size } = await stat(full)
-        if (size > MAX_HASHABLE_BYTES) {
-          oversized.push({ path, size })
-          continue
-        }
-
-        files.push({ path, bytes: new Uint8Array(await readFile(full)) })
+        // A Blob over the file rather than its bytes, so `manifestEntries`
+        // reads it a chunk at a time and a film is described without a film
+        // ever being in memory. There is no size this refuses: that limit was
+        // the absence of a streaming digest, and there is one now.
+        files.push({ path, bytes: await openAsBlob(full) })
       }
     }
   }
   await walk(dir)
-
-  if (oversized.length > 0) {
-    console.log(
-      `\nNot signing “${siteName}”: ${oversized.map(f => f.path).join(', ')} ` +
-      `${oversized.length === 1 ? 'is' : 'are'} larger than ` +
-      `${Math.round(MAX_HASHABLE_BYTES / 1e6)} MB, which is more than a browser ` +
-      'can hold to check a signature. It would be signed here and unverifiable ' +
-      'everywhere. The site is published unsigned.')
-    return
-  }
 
   const entries = await manifestEntries(files)
   const contents = await signManifest(identity.privateKey, {

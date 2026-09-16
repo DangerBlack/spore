@@ -359,6 +359,7 @@ async function run () {
   await checkAFolderCompressedOnAMac()
   await checkRepublishing()
   await checkEveryShapeAgrees()
+  await checkOurSha256()
   await checkJunkRulesMatchTheLibrary()
   await checkShapesNobodyChose()
   await checkAnArchiveWithTooManyFiles()
@@ -1306,24 +1307,21 @@ async function checkAnArchiveTooBigToHold () {
   check('and the signature covers it',
     seeded.some(f => /spore\.sig$/.test(f.path)), JSON.stringify(seeded.map(f => f.path)))
 
-  // The other side of that limit: a reader must not call a site altered because
-  // one of its files is larger than this browser can hold. The publisher
-  // refuses to sign above MAX_HASHABLE_BYTES; the reader used to try anyway,
-  // fail the allocation, and report "broken" — accusing an author of tampering
-  // over a limit that is ours.
+  // The other side of it: there is no size at which a reader stops being able
+  // to check a site. A file larger than the platform's digest will take is
+  // streamed through our own, so a verdict of "altered" can never come from a
+  // limit that is ours.
   const verdicts = await page.evaluate(async () => {
-    const { MAX_HASHABLE_BYTES } = await import('/js/manifest.js')
     const source = await (await fetch('/js/app.js')).text()
     const from = source.indexOf('async function verifyContent')
     const body = source.slice(from, from + source.slice(from).indexOf('\n}\n'))
     return {
-      cap: MAX_HASHABLE_BYTES,
-      guarded: body.includes('MAX_HASHABLE_BYTES'),
-      accuses: /status: 'broken', reason: `\$\{relative\} could not be read/.test(body)
+      hasNoCap: !body.includes('MAX_HASHABLE_BYTES'),
+      neverAccuses: !/status: 'broken'[\s\S]{0,80}could not be read/.test(body)
     }
   })
-  check('a file too large for this browser is unverifiable, not tampered with',
-    verdicts.guarded && !verdicts.accuses, JSON.stringify(verdicts))
+  check('a file too large for one buffer is streamed, not refused or blamed',
+    verdicts.hasNoCap && verdicts.neverAccuses, JSON.stringify(verdicts))
 
   await page.close()
 }
@@ -1588,6 +1586,72 @@ function storedZip (entries) {
   end.setUint32(16, offset, true)
 
   return new Blob([...parts, ...central, new Uint8Array(end.buffer)])
+}
+
+/**
+ * Our SHA-256, against the published vectors and against the platform's.
+ *
+ * Writing a hash is usually a bad idea and this is the narrow case where it is
+ * not: it is completely specified, completely testable, has no key and no
+ * secret, and a mistake produces numbers that do not match rather than a
+ * signature somebody can forge. What makes it defensible is this check — not
+ * that it was written carefully, but that it is compared against
+ * `crypto.subtle.digest` at every boundary that matters, on every run.
+ *
+ * It exists because the platform has no streaming digest, and without one there
+ * was a size above which a site could not be signed, could not be verified, and
+ * was reported to its readers as altered.
+ */
+async function checkOurSha256 () {
+  const { Sha256, digestBlob } = await import(`file://${process.cwd()}/js/sha256.js`)
+  const hex = bytes => [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
+  const utf8 = new TextEncoder()
+
+  // FIPS 180-4 / RFC 6234.
+  const vectors = [
+    ['', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
+    ['abc', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],
+    ['abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq',
+      '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1']
+  ]
+  const wrong = vectors.filter(([input, want]) =>
+    hex(new Sha256().update(utf8.encode(input)).digest()) !== want)
+
+  const million = new Sha256()
+  for (let i = 0; i < 1000; i++) million.update(utf8.encode('a'.repeat(1000)))
+  const millionOk = hex(million.digest()) ===
+    'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0'
+
+  check('our SHA-256 produces the published vectors',
+    wrong.length === 0 && millionOk,
+    wrong.length ? `wrong for ${JSON.stringify(wrong[0][0].slice(0, 20))}` : 'four of four')
+
+  // Every length where the block and padding arithmetic changes behaviour.
+  const sizes = [0, 1, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 1000, 65_536, 1_000_003]
+  const differed = []
+  for (const size of sizes) {
+    const bytes = new Uint8Array(size)
+    for (let i = 0; i < size; i++) bytes[i] = (i * 31) & 0xff
+    const ours = hex(new Sha256().update(bytes).digest())
+    const theirs = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+    if (ours !== theirs) differed.push(size)
+  }
+  check('and agrees with the platform at every boundary that matters',
+    differed.length === 0,
+    differed.length ? `differed at ${differed.join(', ')}` : `${sizes.length} sizes`)
+
+  // Fed in pieces of uneven size, which is how a stream actually arrives.
+  const big = new Uint8Array(3_000_000)
+  for (let i = 0; i < big.length; i++) big[i] = (i * 7) & 0xff
+  const uneven = new Sha256()
+  for (let at = 0; at < big.length;) {
+    const step = 1 + ((at * 13) % 100_000)
+    uneven.update(big.subarray(at, Math.min(at + step, big.length)))
+    at += step
+  }
+  const native = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', big)))
+  check('and arrives at the same answer in uneven pieces, and through a Blob',
+    hex(uneven.digest()) === native && hex(await digestBlob(new Blob([big]))) === native)
 }
 
 /**

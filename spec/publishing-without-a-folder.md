@@ -270,15 +270,27 @@ Deferred until wanted: the editor of Option B, in its narrow form only.
 2. **Does the iOS file picker accept a `.zip` from the Files app**, and does
    `accept=".zip,application/zip"` help or hinder it? Some iOS versions have
    been restrictive about extensions; measure rather than assume.
-3. **What are the caps?** Partly answered, and the first answer was wrong. There
-   is no limit on how large a published site may be, and there must not be: this
-   is a BitTorrent client and people will put films in it. The byte ceilings
-   that were here were covering an implementation — a reader that held the whole
-   archive and every entry in memory — rather than protecting anybody, and the
-   folder and picker paths never had one. A stored entry is handed to the swarm
-   as a slice of the file on disk and never becomes memory, so only what
-   actually inflates is counted. What remains a guess is *that* number, and the
-   bomb ratio beside it.
+3. **What are the caps?** Partly answered, and the first two answers were both
+   wrong. There is no limit on how large a published site may be, and there must
+   not be: this is a BitTorrent client and people will put films in it.
+
+   The byte ceilings that were here were covering an implementation — a reader
+   that held the whole archive in memory — and went when the reader learned to
+   stream. The one that survived longest was subtler: above the largest buffer
+   the platform will digest, a site could not be signed, could not be verified,
+   and was reported to its readers as *altered*. That was not a policy but a
+   missing API: `crypto.subtle.digest` has no streaming form. `js/sha256.js` is
+   that form, checked against the published vectors and against the platform's
+   own digest at every boundary on every run, so there is no size at which a
+   site stops being signable or checkable.
+
+   What remains are three numbers about archives — how much may be decompressed
+   at once, the expansion ratio that says "bomb", and how many files — plus what
+   a reader will download to read a signature. All four are still guesses, and
+   the owner's position is that none of them should refuse anything outright:
+   above a threshold they should *ask*, since every one of them is known before
+   its cost is paid. That work has not been done.
+
 4. **Preview before publishing?** A zip from elsewhere is unreviewed content,
    and publishing is signing. Seeding it locally and opening it in the ordinary
    viewer before announcing would show the author the real thing, through the
