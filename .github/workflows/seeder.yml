@@ -91,11 +91,18 @@ jobs:
           printf 'Bud1' > /tmp/site/.DS_Store
           printf 'fork' > /tmp/site/._index.html
 
-          docker run -d --name smoke \
+          # Host networking, because that is what deploy/seeder/ ships and the
+          # reason it ships it is not cosmetic: under `bridge` Docker's
+          # masquerade is a symmetric NAT and no browser can ever connect, so a
+          # smoke test on a bridge network would be proving the one arrangement
+          # this image must not be run in. It also matters for the line below —
+          # the status endpoint binds loopback, and a published port forwards to
+          # the container's own address, where nothing is listening.
+          docker run -d --name smoke --network host \
             -v /tmp/site:/site:ro -v /tmp/data:/data \
             -e SPORE_SITE_NAME=ci -e SPORE_SITE=ci \
             -e SPORE_PASSPHRASE='a phrase for continuous integration' \
-            -e SPORE_STATUS_PORT=8081 -p 127.0.0.1:8081:8081 \
+            -e SPORE_STATUS_PORT=8081 \
             "${{ secrets.DOCKERHUB_USERNAME }}/spore-seeder:${{ steps.version.outputs.value }}"
 
           for i in $(seq 1 30); do
@@ -131,11 +138,11 @@ jobs:
           # destroyed it — so the newest version went dark on every
           # `docker compose up` while the logs stayed clean.
           docker rm -f smoke
-          docker run -d --name smoke2 \
+          docker run -d --name smoke2 --network host \
             -v /tmp/site:/site:ro -v /tmp/data:/data \
             -e SPORE_SITE_NAME=ci -e SPORE_SITE=ci \
             -e SPORE_PASSPHRASE='a phrase for continuous integration' \
-            -e SPORE_STATUS_PORT=8081 -p 127.0.0.1:8081:8081 \
+            -e SPORE_STATUS_PORT=8081 \
             "${{ secrets.DOCKERHUB_USERNAME }}/spore-seeder:${{ steps.version.outputs.value }}"
 
           for i in $(seq 1 30); do
@@ -143,6 +150,11 @@ jobs:
             sleep 2
           done
           docker logs smoke2
+
+          # The seeder now reports whether readers could reach it. On a runner
+          # this may legitimately be either answer, so it is printed rather than
+          # asserted — but it must have been attempted.
+          docker logs smoke2 2>&1 | grep -E 'Reachable at|NOBODY CAN CONNECT|Cannot tell whether' || true
 
           restarted=$(curl -sf --max-time 5 http://127.0.0.1:8081/ || echo '{}')
           echo "$restarted"

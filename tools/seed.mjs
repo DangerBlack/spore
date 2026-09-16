@@ -822,8 +822,15 @@ function startStatusServer () {
     response.end(JSON.stringify(status(), null, 2) + '\n')
   }).listen(statusPort, statusHost, () => {
     console.log(`Status on http://${statusHost}:${statusPort}/ — curl it to check this seeder.` +
-      (statusHost === '127.0.0.1' ? '' : '\n  Reachable from the network, because ' +
-        'SPORE_STATUS_HOST is not 127.0.0.1.'))
+      (statusHost === '127.0.0.1'
+        // Worth saying here rather than leaving somebody to find it: a
+        // published Docker port forwards to the container's own address, and
+        // loopback inside the container is not that address. Under host
+        // networking — what a seeder should be using anyway, since bridge
+        // breaks WebRTC — this is the machine's own loopback and works.
+        ? '\n  Loopback only, so a bridge network\'s port mapping will not reach it.' +
+          '\n  Use host networking, or SPORE_STATUS_HOST=0.0.0.0.'
+        : '\n  Reachable from the network, because SPORE_STATUS_HOST is not 127.0.0.1.'))
   })
 }
 

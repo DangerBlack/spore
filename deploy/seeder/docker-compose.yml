@@ -72,8 +72,10 @@ services:
     # machine's own address, which is what ICE needs to be able to advertise.
     # The seeder now tests this at startup and says so if it is wrong.
     #
-    # There is no port mapping left to hide behind, so the status endpoint binds
-    # loopback itself — SPORE_STATUS_HOST, 127.0.0.1 by default. It answers
+    # `ports:` is gone because host networking ignores it — there is no NAT to
+    # forward through. Nothing is lost: the status endpoint binds loopback
+    # itself now (SPORE_STATUS_HOST, 127.0.0.1 by default), so `curl
+    # localhost:8081` on the box works exactly as the old mapping made it work. It answers
     # `curl` on the box and the healthcheck, and nothing off the machine. It
     # used to bind every interface and be saved by the mapping, which meant the
     # line above quietly decided whether a service was public. Set
