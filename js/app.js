@@ -25,8 +25,8 @@ import {
   MAX_KEY_BYTES, avatar, fingerprint, formatSporePub, normalizeSite, parseSporePub, saltFor
 } from './identity.js'
 import {
-  MAX_HASHABLE_BYTES, MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries,
-  manifestWouldExceed, missingFrom, signManifest, unlistedIn, verifyManifest
+  MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed,
+  missingFrom, signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
@@ -1028,29 +1028,21 @@ async function verifyContent (torrent, entry, key) {
     const relative = path.slice(manifest.root.length)
     if (relative === SIGNATURE_FILE) continue
 
-    // A file this browser cannot hold is not a file that failed its hash, and
-    // saying "broken" about one accuses an author of tampering over a limit
-    // that is ours. WebCrypto has no streaming digest, so describing a file
-    // means holding all of it: above that, the honest answer is that this site
-    // cannot be checked here, not that it is false.
-    if (file.length > MAX_HASHABLE_BYTES) {
-      return settle({
-        status: 'unverified',
-        reason: `${relative} is too large for this browser to check`
-      })
-    }
-
-    let bytes
+    // The file itself rather than its bytes. `checkFile` digests it whole where
+    // it fits and streams it where it does not, so a film is checked without a
+    // film ever being in memory. There is no size above which a site stops
+    // being checkable, and so none above which its author is wrongly told it
+    // has been altered.
+    let check
     try {
-      bytes = new Uint8Array(await file.arrayBuffer())
+      check = await checkFile(result.manifest, relative, file)
     } catch (err) {
+      // A file that could not be *read* is not a file that failed its hash.
       return settle({
         status: 'unverified',
         reason: `${relative} could not be read here: ${err.message}`
       })
     }
-
-    const check = await checkFile(result.manifest, relative, bytes)
     if (!check.ok) return settle({ status: 'broken', reason: check.reason })
   }
 
@@ -1966,19 +1958,12 @@ async function publishOne (files, name) {
   // large folder sat on an idle landing page for as long as it took, with
   // nothing to show the click had done anything. Every other slow step here
   // announces itself.
-  // A file too large to hold cannot be checked, signed, or judged stale — all
-  // three need its bytes. Such a site goes out exactly as it arrived, keeping
-  // whatever signature came with it, which is the honest outcome and still puts
-  // a film in a swarm.
-  const tooLargeToHash = files.some(file => file.size > MAX_HASHABLE_BYTES)
-
-  if (entry && !tooLargeToHash) busy('Checking the signature it came with…')
-  const mirror = entry && !tooLargeToHash ? await verifiesAsItStands(files) : false
+  if (entry) busy('Checking the signature it came with…')
+  const mirror = entry ? await verifiesAsItStands(files) : false
   if (entry && !mirror) ui.notice.hidden = true
 
-  const hadKey = !mirror && !tooLargeToHash &&
-    files.some(file => pathOf(file) === 'spore.pub')
-  if (!mirror && !tooLargeToHash) files = stripSignature(files)
+  const hadKey = !mirror && files.some(file => pathOf(file) === 'spore.pub')
+  if (!mirror) files = stripSignature(files)
 
   // A manifest is one line per file, and a reader refuses one too large to be
   // a manifest — it is reading a stranger's torrent. A site with thousands of
@@ -1986,7 +1971,7 @@ async function publishOne (files, name) {
   // only produce a signature nobody will open.
   const tooBigToSign = manifestWouldExceed(files.map(pathOf))
 
-  const decision = entry && !mirror && !tooBigToSign && !tooLargeToHash
+  const decision = entry && !mirror && !tooBigToSign
     ? await askAboutSigning(name)
     : { sign: false, site: null }
 
@@ -2010,8 +1995,7 @@ async function publishOne (files, name) {
       dropped: cleaned.dropped,
       discarded: hadKey && !decision.sign,
       replaced: hadKey && decision.sign,
-      tooBigToSign: tooBigToSign && Boolean(entry) && !tooLargeToHash,
-      tooLargeToHash: tooLargeToHash && Boolean(entry)
+      tooBigToSign: tooBigToSign && Boolean(entry)
     })
 
     // Announced before navigating: navigating replaces the site on screen, and
@@ -2073,8 +2057,7 @@ async function verifiesAsItStands (files) {
   for (const file of files) {
     const path = pathOf(file)
     if (path === SIGNATURE_FILE) continue
-    if (!(await checkFile(manifest, path,
-      new Uint8Array(await file.arrayBuffer()))).ok) return false
+    if (!(await checkFile(manifest, path, file)).ok) return false
   }
   return true
 }
@@ -2088,7 +2071,7 @@ async function verifiesAsItStands (files) {
  * site clears it, so a sentence put there appears and vanishes.
  */
 function noteWhatChanged ({
-  renamed, mirror, dropped, discarded, replaced, tooBigToSign, tooLargeToHash
+  renamed, mirror, dropped, discarded, replaced, tooBigToSign
 }) {
   const said = []
 
@@ -2125,12 +2108,6 @@ function noteWhatChanged ({
       'nobody could check. It is published unsigned instead.')
   }
 
-  if (tooLargeToHash) {
-    said.push('It holds a file too large to hash here, so it was published ' +
-      'exactly as it arrived: not signed by you, and not stripped of anything ' +
-      'it came with. Describing a file means holding all of it at once, and ' +
-      'that one does not fit.')
-  }
 
   ui.shareUnsigned.textContent = said.join(' ')
   ui.shareUnsigned.hidden = said.length === 0

@@ -49,6 +49,7 @@
  */
 
 import { fromHex, toHex } from './bencode.js'
+import { digestBlob } from './sha256.js'
 
 export const SIGNATURE_FILE = 'spore.sig'
 
@@ -72,22 +73,36 @@ export const SIGNATURE_FILE = 'spore.sig'
 export const MAX_MANIFEST_BYTES = 4_000_000
 
 /**
- * The largest single file this gate will hash.
+ * The largest buffer this gate will ask the platform to digest in one go.
  *
- * WebCrypto has no streaming digest, so describing a file means holding all of
- * it at once. Everything else about publishing is streamed — a stored archive
- * entry reaches the swarm as a slice of the file on disk and never becomes
- * memory — and this is the one place that cannot be, so it is the one place
- * with a number.
+ * Not a limit on anything: it is the line between two ways of computing the
+ * same number. `crypto.subtle.digest` is ten times faster and takes a complete
+ * buffer, which is fine for a page, a stylesheet or a photograph — nearly every
+ * file there is. Above it the file is streamed through `sha256.js` instead and
+ * never exists whole. Both produce the SHA-256 of the same bytes, and a check
+ * compares them at every size that matters.
  *
- * Above it a site is published exactly as it arrived: not hashed, not checked,
- * not signed, and not stripped of whatever signature it came with. That is the
- * honest outcome rather than a tab that dies during "Hashing 2 files…", and it
- * still puts a film in a swarm, which is the thing that matters.
- *
- * A guess, like the archive numbers, and wanting the same phone to measure it.
+ * There used to be a size above which a site could not be signed, could not be
+ * verified, and was reported to its readers as altered. There is no such size.
  */
-export const MAX_HASHABLE_BYTES = 512_000_000
+const DIGEST_IN_ONE_GO = 64_000_000
+
+/**
+ * The SHA-256 of some bytes, however many there are.
+ *
+ * @param {Uint8Array|Blob|{stream: Function, length?: number, size?: number}} source
+ */
+export async function digestOf (source) {
+  if (source instanceof Uint8Array) {
+    return new Uint8Array(await crypto.subtle.digest('SHA-256', source))
+  }
+
+  const size = source.size ?? source.length ?? Infinity
+  if (size <= DIGEST_IN_ONE_GO && typeof source.arrayBuffer === 'function') {
+    return new Uint8Array(await crypto.subtle.digest('SHA-256', await source.arrayBuffer()))
+  }
+  return await digestBlob(source)
+}
 
 /**
  * Would signing these paths produce a manifest no reader will open?
@@ -272,7 +287,7 @@ export async function checkFile (manifest, path, bytes) {
     return { ok: false, reason: `${path} is not in ${SIGNATURE_FILE}` }
   }
 
-  const digest = toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+  const digest = toHex(await digestOf(bytes))
   return digest === entry.hash
     ? { ok: true }
     : { ok: false, reason: `${path} does not match its signed hash` }
@@ -293,9 +308,9 @@ export function unlistedIn (manifest, presentPaths) {
 /**
  * Build the entry list for a set of files.
  *
- * One file's bytes have to exist at once — WebCrypto has no streaming digest —
- * so the largest file in a site still has to fit in memory. Everything else is
- * released as it goes.
+ * Nothing has to exist whole: a file larger than the platform's digest will
+ * take is streamed through `sha256.js` instead, so a film is described without
+ * a film ever being in memory.
  *
  * @param {{path: string, bytes: Uint8Array|Blob}[]} files
  */
@@ -309,9 +324,7 @@ export async function manifestEntries (files) {
     // which meant holding an entire site in memory in order to describe it —
     // and a site can hold a film. The peak is now the largest single file
     // rather than the sum of all of them.
-    const bytes = file.bytes instanceof Blob ? await file.bytes.arrayBuffer() : file.bytes
-    const digest = await crypto.subtle.digest('SHA-256', bytes)
-    entries.push({ path: file.path, hash: toHex(new Uint8Array(digest)) })
+    entries.push({ path: file.path, hash: toHex(await digestOf(file.bytes)) })
   }
   return entries.sort(byPath)
 }
