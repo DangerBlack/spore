@@ -73,7 +73,7 @@ export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-16.2'
+export const GATE_VERSION = '2026-09-16.3'
 
 /**
  * What a .zip may be.

@@ -13,10 +13,24 @@ import {
   DEFAULT_TRACKERS, METADATA_DEADLINE_MS, METADATA_QUIET_MS, METADATA_SILENT_MS
 } from './config.js'
 
-/** How long to wait for the worker to claim this page before carrying on. */
-const CONTROLLER_TIMEOUT_MS = 3000
+/**
+ * How long to wait for the worker to claim this page before carrying on.
+ *
+ * Three seconds each was too tight, and the cost of being wrong is not a slow
+ * start: at the end of this path the gate unregisters the worker and reloads
+ * the page. A machine that is merely busy — an old phone starting cold, or a
+ * tab doing something expensive — took longer than six seconds to be claimed
+ * and had the page pulled out from under whatever its reader was doing. It
+ * showed up here as a test that failed one run in six, always mid-way through
+ * writing a site to disk, with the execution context simply gone.
+ *
+ * Waiting longer costs a genuinely wedged profile a slower recovery, and it is
+ * told what is happening while it waits. Reloading somebody's page while they
+ * are publishing costs them the publication.
+ */
+const CONTROLLER_TIMEOUT_MS = 10_000
 /** And how long to wait after explicitly asking it to claim us. */
-const CLAIM_TIMEOUT_MS = 3000
+const CLAIM_TIMEOUT_MS = 10_000
 
 /** @type {import('webtorrent').Instance|null} */
 let client = null

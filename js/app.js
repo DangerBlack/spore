@@ -1446,6 +1446,13 @@ function watchTheWorker () {
  */
 async function restoreWorker () {
   if (restoringWorker || !current) return
+
+  // Not while something is being published. The last step of putting a worker
+  // back is unregistering it and reloading the page, and a reload in the middle
+  // of hashing and seeding loses the publication — for a site that is, by
+  // definition, on screen and therefore already being served.
+  if (publishing) return
+
   restoringWorker = true
 
   ui.notice.textContent =
