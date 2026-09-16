@@ -48,18 +48,20 @@ export function findEntry (torrent) {
  * The same question, asked of paths rather than of a torrent.
  *
  * This is the *reader's* half, and it tolerates one leading folder because
- * BitTorrent wraps every multi-file torrent in exactly one. Publishing asks the
- * same question of paths that have not been through that yet, where the same
- * tolerance would accept a folder that is not the torrent's — so `publish.js`
- * anchors its own version at the set's root instead. Two questions about one
- * rule, kept honest by a check that publishes every shape of input and compares
- * the two answers, because every serious defect on this branch was them
- * disagreeing about a shape nobody had tried.
+ * BitTorrent wraps every multi-file torrent in exactly one. `entryFor`, below,
+ * is the publisher's: it asks of paths that have not been through that yet,
+ * where the same tolerance would accept a folder that is not the torrent's.
+ *
+ * Two questions about one rule, kept honest by a check that publishes every
+ * shape of input and compares the two answers, because every serious defect on
+ * this branch was them disagreeing about a shape nobody had tried. Not exported:
+ * a second entry rule reachable from outside is the thing most likely to be
+ * picked up by mistake.
  *
  * @param {string[]} paths
  * @returns {string|null}
  */
-export function chooseEntry (paths) {
+function chooseEntry (paths) {
   return paths.find(path => ENTRY.test(path)) ?? null
 }
 

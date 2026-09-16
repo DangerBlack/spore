@@ -276,25 +276,32 @@ function checkPath (path) {
   // own contract: `css\\style.css` would be published at `css/style.css`, a path
   // its author never wrote. The zip format says forward slashes, so a backslash
   // means a tool that got it wrong, and that is the author's to fix.
+  // Through `printable` from the first line, not from halfway down. The comment
+  // above says everything here runs through it and the last three did; these
+  // four interpolated the raw path, so an entry named `..\u0001/evil` was
+  // refused with control bytes in the message and its author could not match
+  // the error to anything in their archive.
+  const shown = printable(path)
+
   if (path.includes('\\')) {
-    throw new ZipError(`${path} uses backslashes, which a zip may not.`)
+    throw new ZipError(`${shown} uses backslashes, which a zip may not.`)
   }
-  if (path.startsWith('/')) throw new ZipError(`${path} is an absolute path.`)
-  if (/^[a-z]:/i.test(path)) throw new ZipError(`${path} names a drive.`)
+  if (path.startsWith('/')) throw new ZipError(`${shown} is an absolute path.`)
+  if (/^[a-z]:/i.test(path)) throw new ZipError(`${shown} names a drive.`)
 
   // `..` escapes, and `.` or an empty component is a path that means one thing
   // to the torrent builder and another to `new URL()` in the viewer: the signer
   // would record `./index.html` while a reader resolved `index.html`, and the
   // site would fail to verify for a reason nobody could see.
   const parts = path.split('/')
-  if (parts.includes('..')) throw new ZipError(`${path} points outside the archive.`)
+  if (parts.includes('..')) throw new ZipError(`${shown} points outside the archive.`)
   // `.` is refused everywhere, including last: `site/.` is not a directory
   // record, and `new URL()` resolves it to `site/`, so the path the signer
   // records and the path a reader asks for are different strings. An empty
   // component is allowed only as the last one, which is what a directory
   // record's trailing slash is and is meant to be.
   if (parts.includes('.') || parts.slice(0, -1).some(part => part === '')) {
-    throw new ZipError(`${path} is not a plain path.`)
+    throw new ZipError(`${shown} is not a plain path.`)
   }
 
   // C0, DEL and C1. The stated rule is "no control characters", and a range
@@ -302,7 +309,7 @@ function checkPath (path) {
   if (/[\u0000-\u001f\u007f-\u009f]/.test(path)) {
     // Named like every other refusal. This was the one that made the author
     // guess which of their files needed fixing.
-    throw new ZipError(`${printable(path)} has control characters in its name.`)
+    throw new ZipError(`${shown} has control characters in its name.`)
   }
   return path
 }
