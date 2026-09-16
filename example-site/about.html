@@ -36,6 +36,9 @@
       answers.</li>
   <li><strong>The site renders in a sandboxed frame,</strong> under a policy the
       worker attaches to every response.</li>
+  <li><strong>If the site carries a signature, it is checked first,</strong>
+      file by file, against the list its author signed — before the frame is
+      shown and before any author is named.</li>
 </ol>
 
 <p>Step 3 is why the gate never rewrites a site's HTML or invents custom tags to
@@ -67,6 +70,25 @@
    web server, because that is all it is — no build step, no framework, no
    manifest to write.</p>
 
+<p>The top is meant literally. <code>index.html</code> is the one at the root
+   and nowhere else; the gate does not go hunting for a page buried three
+   folders down and decide that must be what you meant. A site without one is
+   not an error — you get the list of its files and you walk it, the way a
+   directory has always been browsable.</p>
+
+<p>How the folder reaches the gate is up to you: drag it in, hand it a
+   <code>.zip</code> of it, or pick files one at a time. A single page on its
+   own is published as <code>index.html</code>, since a site of one page has
+   nothing else it could be. A <code>.zip</code> is read in the browser and
+   never unpacked to disk — what it holds goes into the swarm directly.</p>
+
+<p>Two more names mean something at that root, and only there:
+   <code>spore.pub</code>, the key a site is published under, and
+   <code>spore.sig</code>, a signed list of every other file with its hash. A
+   signature anywhere else is not a signature. Republishing somebody's site
+   keeps their signature only if it verifies whole; otherwise theirs is dropped
+   and the site goes out as yours. There is no third outcome.</p>
+
 <p>Scripts are off by default and switched on per site, by the reader, after
    being told what that costs. Sites are documents here; the ones that need to
    run code should expect to ask.</p>
@@ -78,6 +100,13 @@
    could interfere with the address bar above it. Closing that properly needs a
    second origin for content, which is a later change; until then the toggle
    asks first and says why.</p>
+
+<p>WebKit is a third. A frame carrying the <code>sandbox</code> attribute is
+   never controlled by a service worker there, however the flags are set, so on
+   iOS the choice is between a frame without the attribute and no site at all.
+   The gate takes neither quietly: it measures what this engine does, explains
+   what is lost — a deliberate click could open a tab elsewhere — withdraws the
+   scripts toggle entirely, and asks before showing anything.</p>
 
 <p>Trackers are the other soft spot. Browsers can only find peers through a few
    public WebSocket trackers, which is a small number of shared services in a

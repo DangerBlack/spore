@@ -17,8 +17,9 @@
 </header>
 
 <p class="note"><strong>You are reading this from a torrent.</strong> No web
-   server sent you this page. It came from someone's open browser tab, and
-   while you read it, your browser is offering it to the next person.</p>
+   server sent you this page. It came from whoever happened to have it — an
+   open browser tab, most likely — and while you read it, your browser is
+   offering it to the next person.</p>
 
 <h2>The problem is hosting, not publishing</h2>
 
@@ -57,16 +58,41 @@
 <ol>
   <li><strong>Opens a site from a magnet link.</strong> The site renders in your
       browser, fetched from other people's browsers over WebRTC.</li>
-  <li><strong>Publishes a folder.</strong> Drop a folder with an
-      <code>index.html</code>; it is hashed in your browser and you get a link.
-      It is never sent to a server, because there is no server — it goes to
-      readers directly, and only to those who ask for it.</li>
+  <li><strong>Publishes what you have.</strong> Drop a folder, pick a
+      <code>.zip</code> of one, or choose a single page — whichever shape your
+      work is already in. It is hashed in your browser and you get a link. It is
+      never sent to a server, because there is no server — it goes to readers
+      directly, and only to those who ask for it.</li>
 </ol>
 
 <p>The gate itself is a handful of static files with no backend, so it can be
    re-hosted by anyone in a minute. Taking down one gate accomplishes nothing:
    the same link opens on any other. <a href="about.html">How it works, in
    detail →</a></p>
+
+<h2>Who published it, and whether it still says what they wrote</h2>
+
+<p>Addressing a page by its hash proves the bytes are the ones you asked for. It
+   says nothing about who wrote them. So a site can carry a public key and a
+   signed list of every file it contains, and your browser checks that list
+   against what it actually received — before you are told anything about an
+   author.</p>
+
+<p>What that buys is narrow and worth stating exactly. <strong>It proves that
+   the holder of one key produced precisely these bytes.</strong> It does not
+   prove that the key belongs to who you think: that is settled by comparing a
+   fingerprint against one you already trust, the way it always has been. A name
+   in a site is a claim, and is shown as one.</p>
+
+<p>So there are three answers to <em>who published this</em>, and the gate gives
+   one of them before you read a word: signed by a key, whose fingerprint you
+   can compare; <strong>unsigned</strong>, which is an answer and not a missing
+   one; or <strong>broken</strong> — it claims a key, and the files do not match
+   what that key signed. The third is the one worth having the machinery for.</p>
+
+<p>The same key is what lets a site change. A later version signed by it is
+   offered to people reading the earlier one, so an address can be permanent
+   without the page behind it being frozen.</p>
 
 <h2>Why adoption is not a vanity metric</h2>
 
@@ -125,18 +151,29 @@
       addresses — that is how the transfer happens. Spore protects
       <em>content</em> from removal. It does not hide who published or who is
       reading, and no amount of adoption changes that.</li>
-  <li><strong>It is not always-on yet.</strong> A browser seeds only while its
-      tab is open. Close every tab that has a site, and the site sleeps until
-      someone with a copy opens it again. The bytes are not lost; nobody is
-      holding them out.</li>
-  <li><strong>Sites do not change yet.</strong> A magnet addresses fixed bytes,
-      so an edit produces a new address. Mutable pointers are planned; they are
-      not here.</li>
+  <li><strong>It is not always-on by default.</strong> A browser seeds while
+      its tab is open. A reader can keep a site on their own device, and it is
+      seeded again whenever they open the gate; a seeder can also be run outside
+      a browser, on anything that stays up. But a site nobody kept, with no
+      seeder behind it, sleeps when the last tab closes. The bytes are not lost;
+      nobody is holding them out.</li>
+  <li><strong>Updates travel by word of mouth.</strong> A site can be updated —
+      a new version signed by the same key is offered to readers of the old one
+      — but that offer passes from peer to peer, so it reaches only people who
+      meet somebody holding it. Publish an update and close the tab and nobody
+      is told. The route that would fix this properly runs over UDP, which no
+      browser has.</li>
 </ul>
 
 <h2>The claims, testable from this page</h2>
 
-<p>Everything below is running right now, in the frame you are reading.</p>
+<p>Everything below is running right now, in the frame you are reading — with
+   one caveat that is told to you rather than hidden. WebKit will not let the
+   gate serve a page into a sandboxed frame at all, so on iOS the frame cannot
+   carry the attribute, and the gate says so and asks first. Both claims below
+   still hold there — scripts more strictly, since they cannot be turned on at
+   all. What is lost is narrower: one deliberate click on a link inside a site
+   could open a tab elsewhere, and that tab would see your address.</p>
 
 <p>A site gets <strong>no network egress</strong>: it cannot make your browser
    contact anything outside its own torrent, so it cannot report that you were
@@ -160,13 +197,15 @@
 
 <h2>Where this is going</h2>
 
-<p>Today: open a site, publish a site. That is the whole of it, and it works.</p>
+<p>Today: open a site, publish one in whatever shape you have it, sign it, and
+   offer a later version to the people reading an earlier one. Sites can be kept
+   on a device, and seeded from a server that stays up.</p>
 
-<p>Next: mutable pointers, so a site can be updated without a new address, and
-   a signed index so sites can be found rather than only shared. After that:
-   seeders that run outside a browser, so a site survives everyone closing
-   their tab — and a gate pinned by its own hash, so you can verify the gate
-   before trusting it with a page.</p>
+<p>Next: a way for an update to reach readers who are not in the swarm at the
+   moment it is published — today the offer travels only between peers. Then a
+   signed index, so sites can be found rather than only shared. And a gate
+   pinned by its own hash, so you can check the gate itself before trusting it
+   with a page.</p>
 
 <p class="cta">The useful thing you can do right now is the boring one: publish
    something, and keep this tab open a little longer than you need to.</p>
