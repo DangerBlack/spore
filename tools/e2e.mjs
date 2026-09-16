@@ -2854,6 +2854,40 @@ async function checkContentSignature () {
   const state = await page.$eval('#author', el => el.dataset.state)
   check('altering a file under a real signature is caught and shown as broken',
     state === 'broken', state)
+
+  // --- and the same trick by *adding* rather than changing --------------------
+  // The defence that actually matters against a signed site smuggling unsigned
+  // content: every byte a reader can be served has to be one the manifest
+  // covers. The altered case above was checked and this one was not, which is
+  // how a review came to believe there was a hole here.
+  const smuggled = await page.evaluate(async ({ pub, sig }) => {
+    const { seedTorrent } = await import('/js/swarm.js')
+    const files = [
+      // Untouched: the signature over these is genuinely valid.
+      new File(['<h1>the real thing</h1>'], 'index.html', { type: 'text/html' }),
+      new File(['body{color:#111}'], 'style.css', { type: 'text/css' }),
+      new File([pub], 'spore.pub', { type: 'text/plain' }),
+      new File([sig], 'spore.sig', { type: 'text/plain' }),
+      // And one nobody signed, which the page could reach by relative link.
+      new File(['body{background:url(http://tracker.example/x)}'], 'tracker.css',
+        { type: 'text/css' })
+    ]
+    const names = ['index.html', 'style.css', 'spore.pub', 'spore.sig', 'extra/tracker.css']
+    files.forEach((file, i) => { file.fullPath = `smuggled/${names[i]}` })
+    return (await seedTorrent(files, { name: 'smuggled' })).magnetURI
+  }, { pub: real.pub, sig: real.sig })
+
+  await page.evaluate(() => { location.hash = '' })
+  await wait(500)
+  await page.evaluate(m => { location.hash = m }, smuggled)
+  await page.waitForFunction(
+    () => document.getElementById('author')?.dataset.state &&
+          document.getElementById('author').dataset.state !== 'checking',
+    { timeout: 40_000 })
+  const smuggledState = await page.$eval('#author', el => el.dataset.state)
+  check('a file nobody signed, added under a real signature, is caught too',
+    smuggledState === 'broken', smuggledState)
+
   await page.close()
 }
 
