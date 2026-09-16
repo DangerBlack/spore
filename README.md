@@ -127,9 +127,13 @@ Three ways in, because a folder cannot always be chosen:
 - **Pick a `.zip`** of that folder. It is unpacked in your browser, with no
   library, and never held whole: files stored without compression — video,
   audio, anything already compressed — are handed to the swarm straight out of
-  the archive, so size is no more a limit here than for a dropped folder. A zip
-  is a folder that fits through an ordinary file picker, which on some devices
-  is the only picker there is. iOS appears to offer no folder
+  the archive rather than copied into memory. A zip is a folder that fits
+  through an ordinary file picker, which on some devices is the only picker
+  there is.
+
+  One ceiling that a dropped folder does not have: an archive over four
+  gigabytes is written in the zip64 format, which Spore does not read, so it is
+  refused by name. Drop the folder instead, or zip it in parts. iOS appears to offer no folder
   picker at all — reported, not yet confirmed on a device, so the folder button
   is still offered everywhere and this is the way round it if it is missing.
 - **Pick a page and its files.** A picker reports no relative paths, so
