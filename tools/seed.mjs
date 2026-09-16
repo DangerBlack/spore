@@ -283,7 +283,14 @@ async function restoreVersions () {
         `its files are gone (${version.dir}); dropping it.`)
       continue
     }
-    const torrent = await seedFrom(version.dir)
+    const { torrent, ours } = await seedFrom(version.dir)
+    if (!ours) {
+      // Two entries in the state file that hash the same. One torrent serves
+      // both, and the history keeps the first.
+      console.error(`Version ${version.infoHash.slice(0, 8)} holds the same bytes as a ` +
+        'version already restored; keeping one of them.')
+      continue
+    }
     try {
       await verifyReadable(torrent)
     } catch (err) {
@@ -335,7 +342,13 @@ async function checkForNewVersion ({ firstRun = false } = {}) {
   await declareIdentity(join(staging, siteName))
   await signContent(join(staging, siteName))
 
-  const torrent = await seedFrom(staging)
+  const { torrent, ours } = await seedFrom(staging)
+
+  // Only what this call created may be destroyed. When the folder is unchanged
+  // — the common case on every restart — `torrent` is the live seed of the
+  // newest version, and throwing it away takes the site off the swarm.
+  const release = () => { if (ours) torrent.destroy() }
+
   try {
     await verifyReadable(torrent)
   } catch (err) {
@@ -343,7 +356,7 @@ async function checkForNewVersion ({ firstRun = false } = {}) {
     // is worse than publishing nothing: peers connect, fail, and retry.
     console.error(`Refusing to publish: the copy in ${staging} cannot be read ` +
       `back (${err.message}).`)
-    torrent.destroy()
+    release()
     await rm(staging, { recursive: true, force: true })
     return null
   }
@@ -351,7 +364,7 @@ async function checkForNewVersion ({ firstRun = false } = {}) {
 
   if (newest && torrent.infoHash === newest.infoHash) {
     // Same bytes. Mtimes move for all sorts of reasons that are not edits.
-    torrent.destroy()
+    release()
     await rm(staging, { recursive: true, force: true })
     return null
   }
@@ -361,7 +374,7 @@ async function checkForNewVersion ({ firstRun = false } = {}) {
     // it would be a duplicate; the history is what it is.
     console.log(`The folder now matches version ${torrent.infoHash.slice(0, 8)}, ` +
       'which is already being seeded. Nothing new to publish.')
-    torrent.destroy()
+    release()
     await rm(staging, { recursive: true, force: true })
     return null
   }
@@ -496,12 +509,35 @@ async function pruneOldVersions () {
   await saveState()
 }
 
+/**
+ * Seed a version directory, saying whether this call is what created it.
+ *
+ * `client.seed` on bytes the client already holds does not fail. It warns — "A
+ * torrent with the same id is already being seeded" — throws away the torrent
+ * it was building, and hands the callback the *live* one instead:
+ *
+ *   const existingTorrent = await this.get(torrentBuf)
+ *   if (existingTorrent) { torrent._destroy(); onseed(existingTorrent) }
+ *
+ * So the torrent that comes back may be one we are already serving, and every
+ * refusal path here used to end in `torrent.destroy()`. That is how the newest
+ * version of a site went dark in production: the seeder restarted, re-seeded
+ * three versions from disk, hashed the live folder, found it identical to the
+ * newest, said "nothing new to publish" — and destroyed the seed of the very
+ * version whose magnet it had just printed. It kept announcing, kept the old
+ * versions, and served nothing at the address anyone was given.
+ *
+ * `ours` is the thing that was missing: only the caller that made a torrent
+ * may destroy it.
+ */
 function seedFrom (dir) {
   return new Promise((resolve_, reject) => {
     try {
       // No `name` option: see checkForNewVersion. The name comes from the
       // directory, which is why the directory is named after the site.
-      client.seed(join(dir, siteName), { announceList }, resolve_)
+      client.seed(join(dir, siteName), { announceList }, torrent => {
+        resolve_({ torrent, ours: !seeding.has(torrent.infoHash) })
+      })
     } catch (err) {
       reject(err)
     }
@@ -533,6 +569,38 @@ function magnetFor (torrent) {
   return torrent.magnetURI
 }
 
+/**
+ * Print what is actually being served, by name.
+ *
+ * The summary line above carries a file count, and a count is not enough. This
+ * seeder once ran for hours announcing a magnet whose torrent had been
+ * destroyed underneath it: the logs said “3 versions”, the heartbeat said no
+ * peers, and the one number that gave it away — “newest is 0 files” — sat in
+ * the middle of a sentence that otherwise read as healthy. Readers got “this
+ * site could not be found” from a server that believed it was fine.
+ *
+ * A list is harder to misread than a count. An empty one is impossible to
+ * misread, so it says so in as many words.
+ */
+function listFiles (torrent) {
+  const strip = new RegExp(`^${torrent.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`)
+
+  if (torrent.files.length === 0) {
+    console.log('NOT SERVING ANYTHING. This version has no files — its magnet is\n' +
+      'published and every reader who opens it will be told the site cannot be\n' +
+      'found. Restart the seeder; if it persists, the version directory is gone.\n')
+    return
+  }
+
+  console.log(`Serving ${torrent.files.length} file${torrent.files.length === 1 ? '' : 's'}:`)
+  const width = Math.max(...torrent.files.map(file => strip[Symbol.replace](file.path, '').length))
+  for (const file of torrent.files) {
+    const path = strip[Symbol.replace](file.path, '')
+    console.log(`  ${path.padEnd(width)}  ${format(file.length).padStart(8)}`)
+  }
+  console.log()
+}
+
 /* -------------------------------------------------------------------------- */
 /* Saying what is going on                                                    */
 /* -------------------------------------------------------------------------- */
@@ -544,6 +612,7 @@ function report () {
     `${format(newest.length)}`)
   if (series) console.log(`Site (series): ${series}`)
   console.log(`\n  ${magnetFor(newest)}\n`)
+  listFiles(newest)
   console.log('Open it with any Spore gate by putting that magnet in the fragment:')
   console.log(`  https://<your-gate>/#${magnetFor(newest)}\n`)
 
@@ -631,6 +700,10 @@ function heartbeat () {
   const peers = [...seeding.values()].reduce((n, t) => n + t.numPeers, 0)
   const uploaded = [...seeding.values()].reduce((n, t) => n + t.uploaded, 0)
   const incomplete = [...seeding.values()].filter(t => t.progress < 1).length
+  // A torrent with no files is not incomplete, it is gone: `progress` on a
+  // destroyed torrent still reads as finished, which is how this went unnoticed.
+  const empty = [...seeding.values()].filter(t => t.files.length === 0).length
+  const files = [...seeding.values()].reduce((n, t) => n + t.files.length, 0)
 
   // Marked UTC, because it is. A container with no TZ logs in UTC while the
   // person reading the logs is somewhere else, and an unlabelled clock two
@@ -638,7 +711,9 @@ function heartbeat () {
   // for a fault that is not there.
   return `${new Date().toISOString().slice(11, 19)}Z ` +
     `${versions.length} version${versions.length === 1 ? '' : 's'}  ` +
+    `${files} file${files === 1 ? '' : 's'}  ` +
     `${peers} peer${peers === 1 ? '' : 's'}  ↑ ${format(uploaded)}` +
+    (empty ? `  NOT SERVING ${empty} — those magnets are published and answer nothing` : '') +
     (incomplete ? `  INCOMPLETE ${incomplete} — serving nothing for those` : '') +
     (trackersSilent() ? '  NO TRACKER REPLY — readers cannot be introduced' : '')
 }
@@ -655,6 +730,12 @@ function trackersSilent () {
  * `complete` false is the one worth alerting on: a version whose files no
  * longer verify is announced but cannot be served, which from the outside is
  * indistinguishable from being down.
+ *
+ * It used to be `progress === 1` alone, and a destroyed torrent reports exactly
+ * that — finished, and holding nothing. So a seeder whose newest version had
+ * been torn down under it answered this endpoint with `complete: true` while
+ * every reader got "site could not be found". A file count cannot be faked that
+ * way, so it is both reported and folded into `complete`.
  */
 function status () {
   const newest = versions[versions.length - 1]
@@ -665,7 +746,8 @@ function status () {
     signed: Boolean(identity),
     current: newest?.infoHash ?? null,
     magnetURI: newest ? magnetFor(seeding.get(newest.infoHash)) : null,
-    complete: [...seeding.values()].every(t => t.progress === 1),
+    complete: [...seeding.values()].every(t => t.progress === 1 && t.files.length > 0),
+    files: [...seeding.values()].reduce((n, t) => n + t.files.length, 0),
     peers: [...seeding.values()].reduce((n, t) => n + t.numPeers, 0),
     uploaded: [...seeding.values()].reduce((n, t) => n + t.uploaded, 0),
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
@@ -682,7 +764,8 @@ function status () {
         infoHash: version.infoHash,
         seq: version.seq,
         publishedAt: new Date(version.createdAt).toISOString(),
-        complete: torrent ? torrent.progress === 1 : false,
+        complete: torrent ? torrent.progress === 1 && torrent.files.length > 0 : false,
+        files: torrent?.files.length ?? 0,
         peers: torrent?.numPeers ?? 0
       }
     })

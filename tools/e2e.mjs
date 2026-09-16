@@ -383,6 +383,7 @@ async function run () {
   await checkReadersPassItOn()
   await checkWorkerIsPutBack()
   await checkSandboxProbe()
+  await checkTheSeederSurvivesARestart()
 }
 
 /**
@@ -3655,4 +3656,78 @@ function freePort () {
       probe.close(() => resolve(port))
     })
   })
+}
+
+/**
+ * The seeder still serves its newest version after a restart.
+ *
+ * Nothing in this suite ran `tools/seed.mjs` at all, which is how the following
+ * reached production. `client.seed` on bytes the client already holds does not
+ * fail — it warns and hands the callback the *live* torrent instead. On every
+ * restart the seeder re-seeded each version from disk, hashed the live folder,
+ * found it identical to the newest, concluded there was nothing to publish, and
+ * destroyed what it had been handed: the seed of the version whose magnet it
+ * had just printed. It went on announcing, went on reporting three versions and
+ * no errors, and answered nothing. Readers got "This site could not be found"
+ * from a server that was up.
+ *
+ * So the check is the restart, and the assertion is the file count — the one
+ * number that was wrong, and the one a monitor can watch.
+ */
+async function checkTheSeederSurvivesARestart () {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const root = await mkdtemp(join(tmpdir(), 'spore-seeder-'))
+  const site = join(root, 'site')
+  await mkdir(site, { recursive: true })
+  await writeFile(join(site, 'index.html'), '<h1>restarted</h1>')
+  await writeFile(join(site, 'style.css'), 'body{color:#333}')
+
+  const seeder = fileURLToPath(new URL('seed.mjs', import.meta.url))
+
+  // Unsigned on purpose: deriving a key costs seconds and the defect has
+  // nothing to do with signing. Two files, so a count of two is unambiguous.
+  const start = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [seeder], {
+      env: {
+        ...process.env,
+        SPORE_CONTENT: site,
+        SPORE_DATA: join(root, 'data'),
+        SPORE_SITE_NAME: 'restart-me',
+        SPORE_STATUS_PORT: '0',
+        SPORE_WATCH_SECONDS: '0'
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    let out = ''
+    const finish = value => { clearTimeout(timer); child.kill('SIGKILL'); resolve(value) }
+    const timer = setTimeout(() => finish({ out, files: null }), 60_000)
+
+    child.on('error', reject)
+    child.stderr.on('data', data => { out += data })
+    child.stdout.on('data', data => {
+      out += data
+      const said = /newest is (\d+) files/.exec(out)
+      if (said) finish({ out, files: Number(said[1]) })
+    })
+  })
+
+  const first = await start()
+  check('the seeder serves its files on a first start', first.files === 2,
+    `${first.files} files`)
+
+  // The same data directory, unchanged content: every version is restored from
+  // disk and the live folder duplicates the newest. This is the shape that was
+  // broken, and it is what every `docker compose up` does.
+  const second = await start()
+  check('and still serves them after a restart with the folder unchanged',
+    second.files === 2, `${second.files} files`)
+  check('the restart is the duplicate path, not a different one',
+    /same id is already being seeded/.test(second.out),
+    second.out.split('\n').find(line => /same id/.test(line)) ?? 'no duplicate warning')
+
+  await rm(root, { recursive: true, force: true })
 }

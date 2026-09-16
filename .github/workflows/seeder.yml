@@ -122,4 +122,42 @@ jobs:
             echo 'signed a file the torrent drops'; exit 1
           fi
           grep -q ' index.html$' "$sig" || { echo 'did not sign the page itself'; exit 1; }
+
+          # And then the thing this smoke test did not do, which is why a
+          # release went out that served nothing. Starting once proves the first
+          # run works; every run after the first is a *restart* over a populated
+          # /data, and that is the path that was broken. `client.seed` on bytes
+          # the client already holds hands back the live torrent, and the seeder
+          # destroyed it — so the newest version went dark on every
+          # `docker compose up` while the logs stayed clean.
+          docker rm -f smoke
+          docker run -d --name smoke2 \
+            -v /tmp/site:/site:ro -v /tmp/data:/data \
+            -e SPORE_SITE_NAME=ci -e SPORE_SITE=ci \
+            -e SPORE_PASSPHRASE='a phrase for continuous integration' \
+            -e SPORE_STATUS_PORT=8081 -p 127.0.0.1:8081:8081 \
+            "${{ secrets.DOCKERHUB_USERNAME }}/spore-seeder:${{ steps.version.outputs.value }}"
+
+          for i in $(seq 1 30); do
+            docker logs smoke2 2>&1 | grep -q 'Leave this running' && break
+            sleep 2
+          done
+          docker logs smoke2
+
+          restarted=$(curl -sf --max-time 5 http://127.0.0.1:8081/ || echo '{}')
+          echo "$restarted"
+          # `complete` now requires a file count, so this catches the torrent
+          # being alive-but-empty as well as unreadable.
+          echo "$restarted" | grep -q '"complete": true' ||
+            { echo 'after a restart the seeder serves nothing'; exit 1; }
+          # `if`, not `&&`: the step runs under `bash -e`, where a top-level
+          # `grep ... && { ... }` fails the whole step when grep finds nothing —
+          # which here is the healthy case.
+          if echo "$restarted" | grep -q '"files": 0'; then
+            echo 'after a restart the seeder has no files'; exit 1
+          fi
+          if docker logs smoke2 2>&1 | grep -q 'NOT SERVING'; then
+            echo 'a version is published and answers nothing'; exit 1
+          fi
+
           echo 'ok'
