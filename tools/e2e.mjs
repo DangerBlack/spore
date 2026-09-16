@@ -359,6 +359,7 @@ async function run () {
   await checkAFolderCompressedOnAMac()
   await checkRepublishing()
   await checkEveryShapeAgrees()
+  await checkTheSeederSurvivesARestart()
   await checkOurSha256()
   await checkJunkRulesMatchTheLibrary()
   await checkShapesNobodyChose()
@@ -383,7 +384,6 @@ async function run () {
   await checkReadersPassItOn()
   await checkWorkerIsPutBack()
   await checkSandboxProbe()
-  await checkTheSeederSurvivesARestart()
 }
 
 /**
@@ -3687,8 +3687,10 @@ async function checkTheSeederSurvivesARestart () {
 
   const seeder = fileURLToPath(new URL('seed.mjs', import.meta.url))
 
-  // Unsigned on purpose: deriving a key costs seconds and the defect has
-  // nothing to do with signing. Two files, so a count of two is unambiguous.
+  // Signed, because the second defect this guards is about offers, and there
+  // are none without a key. Signing adds spore.pub and spore.sig to the two
+  // written above, so the site the seeder publishes is four files.
+  const FILES = 4
   const start = () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [seeder], {
       env: {
@@ -3696,6 +3698,8 @@ async function checkTheSeederSurvivesARestart () {
         SPORE_CONTENT: site,
         SPORE_DATA: join(root, 'data'),
         SPORE_SITE_NAME: 'restart-me',
+        SPORE_SITE: 'restart-me',
+        SPORE_PASSPHRASE: 'a passphrase long enough to sign a site with',
         SPORE_STATUS_PORT: '0',
         SPORE_WATCH_SECONDS: '0'
       },
@@ -3704,19 +3708,25 @@ async function checkTheSeederSurvivesARestart () {
 
     let out = ''
     const finish = value => { clearTimeout(timer); child.kill('SIGKILL'); resolve(value) }
-    const timer = setTimeout(() => finish({ out, files: null }), 60_000)
+    const read = () => ({
+      out,
+      files: Number(/newest is (\d+) files/.exec(out)?.[1] ?? NaN),
+      offering: Number(/Offering \w+ to readers of (\d+) older/.exec(out)?.[1] ?? NaN)
+    })
+    const timer = setTimeout(() => finish(read()), 90_000)
 
     child.on('error', reject)
     child.stderr.on('data', data => { out += data })
     child.stdout.on('data', data => {
       out += data
-      const said = /newest is (\d+) files/.exec(out)
-      if (said) finish({ out, files: Number(said[1]) })
+      // "Leave this running" is the last line of the opening report, so it is
+      // the point at which every number this check reads has been printed.
+      if (/Leave this running/.test(out)) finish(read())
     })
   })
 
   const first = await start()
-  check('the seeder serves its files on a first start', first.files === 2,
+  check('the seeder serves its files on a first start', first.files === FILES,
     `${first.files} files`)
 
   // The same data directory, unchanged content: every version is restored from
@@ -3724,10 +3734,24 @@ async function checkTheSeederSurvivesARestart () {
   // broken, and it is what every `docker compose up` does.
   const second = await start()
   check('and still serves them after a restart with the folder unchanged',
-    second.files === 2, `${second.files} files`)
+    second.files === FILES, `${second.files} files`)
   check('the restart is the duplicate path, not a different one',
     /same id is already being seeded/.test(second.out),
     second.out.split('\n').find(line => /same id/.test(line)) ?? 'no duplicate warning')
+
+  // An edit, so there is an older version for the newest to be offered to.
+  await writeFile(join(site, 'index.html'), '<h1>restarted, and edited</h1>')
+  const third = await start()
+  check('publishing a second version offers it to readers of the first',
+    third.offering === 1, `offering ${third.offering}`)
+
+  // And the restart again, which is where the offer used to disappear:
+  // `refreshOffers` was reached only from the branch that publishes, and an
+  // unchanged folder returns before it. The seeder went on holding the old
+  // version and never mentioned the new one to anybody reading it.
+  const fourth = await start()
+  check('and still offers it after a restart with the folder unchanged',
+    fourth.offering === 1, `offering ${fourth.offering}`)
 
   await rm(root, { recursive: true, force: true })
 }

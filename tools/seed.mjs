@@ -43,6 +43,7 @@
  *   SPORE_CONTENT     folder to serve            (default /site)
  *   SPORE_DATA        where versions are kept    (default /data)
  *   SPORE_STATUS_PORT health endpoint            (default 8081, 0 disables)
+ *   SPORE_STATUS_HOST what it listens on          (default 127.0.0.1)
  *   SPORE_WATCH_SECONDS  how often to look for edits (default 30, 0 disables)
  *   SPORE_KEEP_VERSIONS  how many to keep seeding  (default 10)
  */
@@ -87,6 +88,7 @@ Configured by environment (see deploy/seeder/.env.example); flags override:
   --site <name>       which of your sites it is  (SPORE_SITE)
   --name <name>       the name readers see       (SPORE_NAME)
   --status-port <n>   health endpoint            (SPORE_STATUS_PORT, 8081)
+  --status-host <h>   what it listens on         (SPORE_STATUS_HOST, 127.0.0.1)
   --watch-seconds <n> how often to look for edits (SPORE_WATCH_SECONDS, 30)
   --keep-versions <n> how many to keep seeding   (SPORE_KEEP_VERSIONS, 10)
 
@@ -102,6 +104,11 @@ const dataPath = resolve(setting('SPORE_DATA', '/data'))
 const siteName = setting('SPORE_SITE_NAME', basename(contentPath))
 const claimedName = setting('SPORE_NAME', null)
 const statusPort = Number(setting('SPORE_STATUS_PORT', '8081'))
+// Loopback by default. It used to bind every interface, which was invisible
+// behind a port mapping and became a public endpoint the moment host
+// networking was the right answer for WebRTC — a configuration change in one
+// place silently publishing a service in another. Set 0.0.0.0 to expose it.
+const statusHost = setting('SPORE_STATUS_HOST', '127.0.0.1')
 const watchSeconds = Number(setting('SPORE_WATCH_SECONDS', '30'))
 const keepVersions = Math.max(1, Number(setting('SPORE_KEEP_VERSIONS', '10')))
 const announceSeconds = Math.max(15, Number(setting('SPORE_ANNOUNCE_SECONDS', '60')))
@@ -236,7 +243,15 @@ let lastTrackerReplyAt = null
 let lastAnnounceError = null
 
 await restoreVersions()
-await checkForNewVersion({ firstRun: true })
+const publishedAtStartup = await checkForNewVersion({ firstRun: true })
+
+// Offers are attached here, not only where a version is published. The publish
+// path returns early whenever the folder is unchanged — which is every restart
+// that is not also an edit, so the overwhelmingly common one — and it used to
+// take `refreshOffers` with it. The seeder then held every old version and told
+// nobody about the new one: a reader opening last week's magnet was met by a
+// peer that had the successor in memory and never mentioned it.
+if (!publishedAtStartup) await refreshOffers()
 
 if (versions.length === 0) {
   console.error('Nothing could be published. Is the folder empty?')
@@ -248,6 +263,7 @@ startStatusServer()
 startHeartbeat()
 startWatching()
 startAnnouncing()
+checkReachability()
 
 process.on('SIGINT', () => {
   console.log('\nStopping.')
@@ -471,7 +487,15 @@ async function signContent (dir) {
  * it reaches a browser over the wire because a browser cannot speak UDP.
  */
 async function refreshOffers () {
-  if (!identity || versions.length < 2) return
+  if (versions.length < 2) return
+  if (!identity) {
+    // Said once, where it matters: without a key there is nothing to sign an
+    // offer with, so the old versions are seeded and permanently orphaned.
+    console.log(`${versions.length - 1} older version` +
+      `${versions.length === 2 ? '' : 's'} will never hear about the newest: ` +
+      'no passphrase, so no key to sign an offer with.\n')
+    return
+  }
 
   const newest = versions[versions.length - 1]
   const record = await signUpdate(
@@ -494,6 +518,9 @@ async function refreshOffers () {
       onUpdate: () => {}
     }))
   }
+
+  console.log(`Offering ${newest.infoHash.slice(0, 8)} to readers of ` +
+    `${announcing.length} older version${announcing.length === 1 ? '' : 's'}.\n`)
 }
 
 /** Old versions cost a full copy of the site each, so the history is bounded. */
@@ -748,6 +775,9 @@ function status () {
     magnetURI: newest ? magnetFor(seeding.get(newest.infoHash)) : null,
     complete: [...seeding.values()].every(t => t.progress === 1 && t.files.length > 0),
     files: [...seeding.values()].reduce((n, t) => n + t.files.length, 0),
+    // How many older swarms are being told about the newest version. Zero with
+    // more than one version means readers on an old magnet are stranded.
+    offering: announcing.length,
     peers: [...seeding.values()].reduce((n, t) => n + t.numPeers, 0),
     uploaded: [...seeding.values()].reduce((n, t) => n + t.uploaded, 0),
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
@@ -790,8 +820,10 @@ function startStatusServer () {
       'access-control-allow-origin': '*'
     })
     response.end(JSON.stringify(status(), null, 2) + '\n')
-  }).listen(statusPort, () => {
-    console.log(`Status on http://0.0.0.0:${statusPort}/ — curl it to check this seeder.`)
+  }).listen(statusPort, statusHost, () => {
+    console.log(`Status on http://${statusHost}:${statusPort}/ — curl it to check this seeder.` +
+      (statusHost === '127.0.0.1' ? '' : '\n  Reachable from the network, because ' +
+        'SPORE_STATUS_HOST is not 127.0.0.1.'))
   })
 }
 
@@ -879,4 +911,79 @@ async function chownRecursive (dir, uid, gid) {
     if (entry.isDirectory()) await chownRecursive(full, uid, gid)
     else await chown(full, uid, gid).catch(() => {})
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Whether anyone can actually connect                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Say, at startup, whether this host's NAT allows WebRTC at all.
+ *
+ * A browser peer cannot dial anyone: a tracker introduces two peers and they
+ * hole-punch. That works when the NAT gives a connection the same external port
+ * whatever it is talking to. A NAT that picks a fresh port per destination — a
+ * symmetric one — makes the address learned from a STUN server true only for
+ * the STUN server, so every introduction ends in a connection that never opens.
+ *
+ * `network_mode: bridge` produces exactly that, because Docker's masquerade
+ * allocates per flow. This seeder shipped with it. On a public VPS, announcing
+ * happily, trackers replying within seconds, every version complete and
+ * verified, it sat for eighteen minutes with zero peers and zero bytes uploaded
+ * while readers were told the site could not be found. Nothing in its output
+ * was wrong; the one thing that mattered was not in its output at all.
+ *
+ * Two STUN servers, and compare the port. It is the standard test, it costs one
+ * UDP exchange, and it turns a silent misconfiguration into a line that names
+ * the fix.
+ */
+async function checkReachability () {
+  const ask = url => new Promise(resolve => {
+    let pc
+    try {
+      // From the polyfill, not a global: Node has no WebRTC of its own, which
+      // is the whole reason node-datachannel is a dependency here.
+      pc = new wrtc.RTCPeerConnection({ iceServers: [{ urls: url }] })
+    } catch {
+      return resolve(null) // no WebRTC here at all; the seeder will say so louder
+    }
+    const seen = []
+    pc.onicecandidate = event => { if (event.candidate) seen.push(event.candidate.candidate) }
+    try {
+      pc.createDataChannel('probe')
+      pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {})
+    } catch { /* fall through to the timeout */ }
+    setTimeout(() => {
+      const reflexive = seen.find(candidate => candidate.includes('srflx'))
+      try { pc.close() } catch { /* already gone */ }
+      resolve(reflexive ? reflexive.split(' ').slice(4, 6).join(':') : null)
+    }, 9000)
+  })
+
+  const [first, second] = await Promise.all([
+    ask('stun:stun.l.google.com:19302'),
+    ask('stun:global.stun.twilio.com:3478')
+  ])
+
+  if (!first || !second) {
+    console.log('\nCannot tell whether readers can reach this seeder: no STUN server\n' +
+      'answered. If it stays at 0 peers with the trackers replying, that is why.\n')
+    return
+  }
+
+  const [address, port] = first.split(':')
+  if (port === second.split(':')[1]) {
+    console.log(`\nReachable at ${address}: readers introduced by a tracker can ` +
+      'open a connection.\n')
+    return
+  }
+
+  console.log(`\nNOBODY CAN CONNECT TO THIS SEEDER. The NAT in front of it gives every
+destination a different port (${port} to one STUN server, ${second.split(':')[1]} to
+another), so the address it advertises is true only for the server that told it.
+Trackers will keep introducing readers and every connection will fail.
+
+Under Docker this is \`network_mode: bridge\`. Use \`network_mode: host\`, which
+needs no ports forwarded — WebRTC connects outbound — and gives this container
+the machine's own address instead of one behind a masquerade.\n`)
 }

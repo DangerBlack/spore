@@ -55,9 +55,27 @@ services:
 
     # Nothing to publish inbound for the swarm itself: WebRTC connections are
     # established outbound through the trackers, so seeding needs no
-    # forwarding. The one port is the status endpoint, on localhost — enough
-    # for curl on the box and for the healthcheck, without putting it on the
-    # internet. Change to "8081:8081" to reach it from your laptop.
-    ports:
-      - "127.0.0.1:8081:8081"
-    network_mode: bridge
+    # forwarding. That much was always true, and it was not enough.
+    #
+    # `network_mode: bridge` — what this file used to say — puts the container
+    # behind Docker's masquerade, which allocates a fresh external port per
+    # destination. That is a symmetric NAT, and it is fatal to WebRTC: the
+    # address a peer learns from a STUN server is true only towards that STUN
+    # server, so every introduction a tracker makes ends in a connection that
+    # never opens. Measured on a public VPS running this file: trackers
+    # replying within seconds, three versions complete and verified, and after
+    # eighteen minutes zero peers and zero bytes served, while readers were
+    # told the site could not be found.
+    #
+    # Host networking removes that layer. It still forwards nothing and opens
+    # nothing inbound for the swarm; it just lets the container use the
+    # machine's own address, which is what ICE needs to be able to advertise.
+    # The seeder now tests this at startup and says so if it is wrong.
+    #
+    # There is no port mapping left to hide behind, so the status endpoint binds
+    # loopback itself — SPORE_STATUS_HOST, 127.0.0.1 by default. It answers
+    # `curl` on the box and the healthcheck, and nothing off the machine. It
+    # used to bind every interface and be saved by the mapping, which meant the
+    # line above quietly decided whether a service was public. Set
+    # SPORE_STATUS_HOST=0.0.0.0 if you actually want it reachable.
+    network_mode: host
