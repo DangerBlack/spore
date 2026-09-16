@@ -3,15 +3,17 @@
  *
  * ## Why this exists
  *
- * A site is a folder, and on some devices a folder cannot be chosen at all:
- * iOS offers no directory picker, so `<input webkitdirectory>` falls back to
- * single files and there is nothing to drag. A zip is a folder that fits
- * through the ordinary file picker, which reaches Files, iCloud Drive and every
- * other document provider. It routes around that one gap and nothing else.
+ * A site is a folder, and a folder is the one thing not every way in can
+ * express. Dragging one needs a pointer and a window. `<input webkitdirectory>`
+ * needs a browser that implements it, and quietly degrades to picking single
+ * files where it does not. Picking loose files always works, but a file picker
+ * reports no relative paths, so everything lands at the root and a site with
+ * `css/style.css` cannot be described at all.
  *
- * Picking loose files works too, but a file picker yields no relative paths, so
- * everything lands at the root of the torrent. A site with `css/style.css`
- * cannot be expressed that way at all. That is what this is for.
+ * An archive is a folder that fits through the one picker every browser has. It
+ * is not here to work around a particular device; it is here so that whoever is
+ * publishing can hand the site over in whatever form they have it — the folder
+ * itself, an archive of it, or the page alone.
  *
  * ## No dependency
  *
