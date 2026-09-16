@@ -44,6 +44,15 @@ body {
 .chrome {
   flex: none;
   display: flex;
+  /* Wraps, because it does not fit a phone. The address field is `flex: 1`
+     with `min-width: 0`, so with a site open it surrendered every pixel to the
+     two checkboxes beside it and measured 26px across at 360 — two characters,
+     on the device this whole path exists for. Nothing spilled off the side, so
+     the layout check passed: it asked whether anything overflowed and never
+     whether anything was usable. The checkboxes drop to a second row now and
+     the address keeps a width somebody can paste into. */
+  flex-wrap: wrap;
+  row-gap: 8px;
   gap: 12px;
   align-items: center;
   padding: 10px 14px;
@@ -69,7 +78,7 @@ body {
   display: flex;
   flex: 1;
   gap: 8px;
-  min-width: 0;
+  min-width: 12rem;
 }
 
 .address {
