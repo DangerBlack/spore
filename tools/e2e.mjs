@@ -2988,6 +2988,14 @@ async function checkMobileLayout () {
     check(`nothing spills off the side of a ${phone.name}`,
       spill.scroll <= spill.width, JSON.stringify(spill))
 
+    // Not spilling is not the same as being usable, and only the first was ever
+    // asked. With a site open the address field is `flex: 1` against two
+    // checkboxes and measured twenty-six pixels across — two characters, on the
+    // device this path exists for — while this check passed happily.
+    const address = await page.$eval('#address', el => Math.round(el.getBoundingClientRect().width))
+    check(`the address field is wide enough to paste into on a ${phone.name}`,
+      address >= 120, `${address}px`)
+
     // Every dialog: inside the screen, with a gutter, and scrollable to its
     // buttons rather than running off the bottom.
     for (const id of ['signin-dialog', 'author-dialog', 'diagnostics',
