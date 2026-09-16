@@ -4,14 +4,16 @@
   "type": "module",
   "description": "A browser inside the browser: static sites hosted in torrents.",
   "license": "MIT",
-  "//": "The gate itself has no dependencies and no build step \u2014 it is static files. Everything here is for the tools in tools/ and deploy/, which are not part of the bundle and are never needed to host or mirror it.",
+  "//": "The gate itself has no dependencies and no build step — it is static files. Everything here is for the tools in tools/ and deploy/, which are not part of the bundle and are never needed to host or mirror it.",
   "scripts": {
     "test": "node tools/e2e.mjs",
     "serve": "node tools/serve.mjs"
   },
   "devDependencies": {
     "bittorrent-tracker": "^11.2.3",
+    "create-torrent": "^6.1.3",
     "node-datachannel": "^0.33.3",
+    "parse-torrent": "^11.0.24",
     "puppeteer-core": "^25.10.0",
     "webtorrent": "^3.0.21"
   }

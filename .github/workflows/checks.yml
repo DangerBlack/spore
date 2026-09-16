@@ -1,0 +1,58 @@
+# Run the checks.
+#
+# There was no such workflow. The only one in this repository builds the seeder
+# image, so `tools/e2e.mjs` — which drives a real browser through both MVP
+# promises and the security model behind them, and which grew by fourteen
+# hundred lines in the work that added this file — ran only when somebody
+# remembered to run it. Including the randomised check that compares what the
+# publisher decides a site is against what a reader sees, which is the whole
+# defence against the class of defect that work existed to remove.
+#
+# The gate itself still has no build step and no dependencies: everything
+# installed here is for the tools, and none of it is needed to host or mirror
+# the bundle.
+
+name: checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # The suite publishes torrents, waits on trackers and hashes a
+    # seventy-megabyte film in a real browser. It takes minutes, not seconds.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Named rather than assumed: the runner image ships Chrome, and a missing
+      # binary should say so here instead of surfacing as a puppeteer error
+      # thirty lines into a stack trace.
+      - name: Find a browser
+        id: browser
+        run: |
+          for candidate in /usr/bin/google-chrome /usr/bin/chromium-browser /usr/bin/chromium; do
+            if [ -x "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              "$candidate" --version
+              exit 0
+            fi
+          done
+          echo 'No Chrome or Chromium on this runner, and the suite drives a real one.'
+          exit 1
+
+      - name: Run the checks
+        env:
+          CHROME: ${{ steps.browser.outputs.path }}
+        run: npm test

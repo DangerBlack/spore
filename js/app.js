@@ -665,6 +665,13 @@ function backOut () {
  */
 function restoreStage () {
   if (!current) return showWelcome()
+
+  // Only when the listing is what was covered up. A reader who clicked into a
+  // file from a file list is looking at that file in the viewer, and putting
+  // the list back would throw them out of it — which is the very thing
+  // `failToPublish` exists to prevent, one level down: losing what you were
+  // reading because of something you dropped by accident.
+  if (!ui.viewer.hidden) return
   if (!findEntry(current.torrent)) showListing(current.torrent)
 }
 

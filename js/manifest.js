@@ -69,6 +69,15 @@ export const SIGNATURE_FILE = 'spore.sig'
  * So there is one number, it lives beside the format it describes, and both
  * ends import it. Four megabytes is roughly forty thousand files, which is far
  * past anything a browser can publish and nothing beside the site it describes.
+ *
+ * It was half a megabyte, and raising it eightfold does loosen the reader's
+ * side of the bargain — worth saying rather than leaving to be noticed. The
+ * loosening is small in the terms that matter: the threat is a hostile site
+ * parking gigabytes at this path, and four megabytes stops that just as flatly
+ * as half a megabyte did. What half a megabyte also stopped was a photo gallery
+ * of five thousand files, published honestly and shown to everyone as unsigned.
+ * One number has to serve both ends, so it is set where no honest site reaches
+ * it and no hostile one gains anything worth having.
  */
 export const MAX_MANIFEST_BYTES = 4_000_000
 
