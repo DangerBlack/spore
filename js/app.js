@@ -1013,7 +1013,12 @@ async function verifyContent (torrent, entry, key) {
   // the swarm in the background to fill in a chip — so there is a budget, and
   // above it the honest answer is that the site was not checked here rather
   // than a quiet hour of someone else's bandwidth.
-  const weight = torrent.files
+  // Only what is not already here. A publisher's own site is complete in their
+  // own client the moment they publish it, and a kept site is complete on disk
+  // — so measuring the whole torrent told an author their own 300 MB site was
+  // unverified because checking it "would download 300 MB", none of which
+  // anyone would have downloaded.
+  const weight = torrent.done ? 0 : torrent.files
     .filter(file => file.path.replace(/\\/g, '/').startsWith(manifest.root))
     .reduce((total, file) => total + file.length, 0)
 
@@ -1686,10 +1691,12 @@ function showListing (torrent) {
 
   ui.scripts.disabled = true
   ui.scriptsLabel.hidden = true
-  // Asked rather than assumed. This used to run only on a fresh open, where
-  // "not kept" was true by construction; it is now also how the stage is put
-  // back after a publish is refused, and a reader who had kept the listing
-  // watched the tick disappear while the site stayed on disk.
+  // Cleared first, then corrected. Asking is right — this is now also how the
+  // stage is put back after a refused publish, and a reader who had kept the
+  // listing watched the tick vanish while the site stayed on disk — but leaving
+  // the old value up while the answer arrives shows the *previous* site's state,
+  // and leaves it there for ever if the read fails.
+  ui.keep.checked = false
   isKept(torrent.infoHash).then(kept => {
     if (current?.torrent === torrent) ui.keep.checked = kept
   }).catch(() => {})
@@ -1849,6 +1856,11 @@ function wireDropTarget () {
     // A dropped archive is unpacked here, and unpacking can refuse: corrupt,
     // encrypted, over a cap. Without this the rejection was unhandled and the
     // page simply did nothing, which is the worst of the available answers.
+    // Said before unpacking, like both pickers. A dropped archive inflates and
+    // checks every entry, which for a couple of hundred megabytes is many
+    // seconds of a page that looks like it ignored the drop. Fifth time on this
+    // branch that one entry point was fixed and its siblings left.
+    busy('Reading…')
     try {
       const { files, name } = await filesFromDrop(event.dataTransfer)
       await seed(files, name)
@@ -2007,8 +2019,11 @@ async function publishOne (files, name) {
   // only produce a signature nobody will open.
   // Counting the key file too, because signing adds one and the check that
   // fits without it may not fit with it.
+  // A Set, because on the mirror path `files` still holds `spore.pub` and
+  // `spore.sig` — `stripSignature` only runs when it is not a mirror — and
+  // counting them twice pushed a borderline republication over the line.
   const tooBigToSign = manifestWouldExceed(
-    [...files.map(pathOf), 'spore.pub', SIGNATURE_FILE])
+    [...new Set([...files.map(pathOf), 'spore.pub', SIGNATURE_FILE])])
 
   const decision = entry && !mirror && !tooBigToSign
     ? await askAboutSigning(name)
@@ -2034,7 +2049,7 @@ async function publishOne (files, name) {
       dropped: cleaned.dropped,
       discarded: hadKey && !decision.sign,
       replaced: hadKey && decision.sign,
-      tooBigToSign: tooBigToSign && Boolean(entry)
+      tooBigToSign: tooBigToSign && Boolean(entry) && !mirror
     })
 
     // Announced before navigating: navigating replaces the site on screen, and

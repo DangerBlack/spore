@@ -73,7 +73,22 @@ export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-16.3'
+export const GATE_VERSION = '2026-09-16.4'
+
+/**
+ * How much a reader will pull off the swarm to check a signature unasked.
+ *
+ * Verifying means hashing every file the manifest covers, and hashing means
+ * downloading. Until the streaming digest existed a large file simply threw and
+ * the check stopped; now it succeeds — so opening a signed torrent that holds a
+ * four-gigabyte film to read its one-page index would quietly fetch the whole
+ * film in the background, to fill in a chip saying who wrote the page.
+ *
+ * Above this the site reads as unverified with the size said out loud. It ought
+ * to *ask* rather than decline — that is the rule for every threshold here, and
+ * the number is known before the cost is paid — and that work is not done.
+ */
+export const VERIFY_WITHOUT_ASKING_BYTES = 256_000_000
 
 /**
  * What a .zip may be.
@@ -98,21 +113,6 @@ export const GATE_VERSION = '2026-09-16.3'
  * All three are still guesses. They should come from measuring a mid-range
  * phone, which has not been done.
  */
-/**
- * How much a reader will pull off the swarm to check a signature unasked.
- *
- * Verifying means hashing every file the manifest covers, and hashing means
- * downloading. Until the streaming digest existed a large file simply threw and
- * the check stopped; now it succeeds — so opening a signed torrent that holds a
- * four-gigabyte film to read its one-page index would quietly fetch the whole
- * film in the background, to fill in a chip saying who wrote the page.
- *
- * Above this the site reads as unverified with the size said out loud. It ought
- * to *ask* rather than decline — that is the rule for every threshold here, and
- * the number is known before the cost is paid — and that work is not done.
- */
-export const VERIFY_WITHOUT_ASKING_BYTES = 256_000_000
-
 export const ZIP_MAX_INFLATED_BYTES = 256_000_000
 export const ZIP_MAX_EXPANSION = 2_000
 export const ZIP_MAX_ENTRIES = 2_000
