@@ -13,3 +13,6 @@ deploy/seeder/.env
 
 # Stray bytecode from scratchpad tooling run inside the repo.
 __pycache__/
+
+# Internal security review working docs — not for the public repo.
+.claude/security-review/
