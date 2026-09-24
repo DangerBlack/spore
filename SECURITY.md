@@ -157,7 +157,24 @@ the gate states the trade-off before accepting.
 
 A site running with scripts shares the gate's origin, so it can reach
 `window.parent` and tamper with the gate's own chrome — the address bar above it
-is no longer trustworthy. What still holds:
+is no longer trustworthy. And because `localStorage`, IndexedDB and the service
+worker registration belong to the origin, not to a site, the reach is not
+limited to the site that was granted scripts:
+
+- It can read and rewrite what Spore stores for **every** site: kept sites,
+  which authors the reader trusts and how far each series has advanced (so it
+  can make a genuine update from someone else look like a replay and be
+  refused), and which other infohashes may run scripts.
+- It can unregister the service worker every open Spore tab depends on, and
+  keep doing so. The gate notices and re-registers, but a site that repeats
+  the call can keep other tabs from rendering for as long as it stays open.
+- If a publishing key is kept on this device, it can *use* that key — not
+  export it — to sign whatever it likes. Signing is not network egress, so no
+  CSP directive applies to it.
+
+The question the gate asks before enabling scripts says all of this, because a
+reader deciding whether to trust one site is in fact deciding whether to trust
+it with all of the above. What still holds:
 
 - It cannot reach the network outside its torrent (`connect-src`, and every
   other fetch directive, stay pinned to the infohash).
@@ -170,8 +187,12 @@ is no longer trustworthy. What still holds:
   granted to and cannot be transferred to different content.
 
 **The fix is a second origin for content**, which turns the shared-origin
-problem into a real boundary. That is a Phase 2 change because it means the gate
-is no longer one bundle on one hostname.
+problem into a real boundary. It has to be one origin *per infohash*, not one
+shared second hostname, or sites would share an origin with each other instead
+of with the gate — which means wildcard DNS, wildcard TLS and a cooperating
+proxy, so it can only ever be an option for mirrors that run those, never the
+default on a plain static host. What it takes is worked through in
+[spec/second-origin-isolation.md](spec/second-origin-isolation.md).
 
 This is also the reason the next section exists: anything a script can reach on
 this origin includes whatever Spore has stored there.
