@@ -1,0 +1,61 @@
+# Each site on an origin of its own — only if you turn CONTENT_ISOLATION on.
+#
+# Not used by default, and most mirrors should leave it that way: it needs a
+# domain of your own, a wildcard DNS record and a wildcard certificate. What it
+# buys is described in spec/second-origin-isolation.md; in short, a site whose
+# scripts a reader enables can no longer reach what Spore stores for every other
+# site.
+#
+# Replace spore.example with your gate's host and content.spore.example with
+# the domain sites will live under. Then, in the bundle you serve:
+#
+#   js/config.js   export const CONTENT_ISOLATION = {
+#                    gate: 'https://spore.example',
+#                    content: 'content.spore.example'
+#                  }
+#   index.html     frame-src 'self' https://*.content.spore.example;
+#
+# DNS:  *.content.spore.example  →  this host
+# TLS:  a certificate for *.content.spore.example. A wildcard can only be
+#       issued through a DNS challenge (ACME DNS-01), so the proxy in front of
+#       this — Caddy, Traefik, certbot — needs a plugin for your DNS provider.
+#
+# To use it with deploy/gate, copy it next to nginx.conf as a .conf and add a
+# COPY line for it in the Dockerfile.
+
+server {
+    listen 80;
+    # Exactly forty hex characters, then the content domain: an infohash, and
+    # nothing that could be mistaken for one.
+    server_name "~^[0-9a-f]{40}\.content\.spore\.example$";
+    root /usr/share/nginx/html;
+
+    # The rule that matters, and the reason this block ends in a 404:
+    # this host serves Spore's own relay and nothing else. A service worker's
+    # script is always fetched from the network, never through an existing
+    # worker — so a site with scripts on that tries to register a worker from
+    # one of its own torrent paths reaches *this server*, and must get a 404.
+    # Serving the gate's whole directory here, or anything under /webtorrent/,
+    # would hand it that worker.
+
+    location = /relay.html {
+        # Only the gate may frame the relay. A <meta> policy cannot say this,
+        # which is why it is here rather than in relay.html.
+        add_header Content-Security-Policy "frame-ancestors https://spore.example" always;
+        add_header Cache-Control "no-cache";
+    }
+
+    # The site's worker. Never cached, for the same reason as the gate's.
+    location = /sw.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+
+    # What relay.html imports.
+    location ~ ^/js/(relay|isolation|config|policy)\.js$ {
+        add_header Cache-Control "no-cache";
+    }
+
+    location / {
+        return 404;
+    }
+}
