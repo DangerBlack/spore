@@ -3625,6 +3625,14 @@ async function checkStuckViewerIsDetected (page) {
  * answers a content origin about its own torrent and no other.
  */
 async function runIsolated () {
+  // The option is for mirrors that run wildcard DNS and TLS; shipping it on
+  // would break every plain static mirror. This run turns it on through the
+  // server hook, so the file on disk must still say off.
+  const { readFileSync } = await import('node:fs')
+  const config = readFileSync(new URL('../js/config.js', import.meta.url), 'utf8')
+  check('isolation: the bundle as committed ships with it off',
+    /^export const CONTENT_ISOLATION = null$/m.test(config))
+
   const isoPort = await freePort()
   const gate = `http://spore.localhost:${isoPort}`
   const content = `content.spore.localhost:${isoPort}`

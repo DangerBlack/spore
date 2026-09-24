@@ -197,6 +197,40 @@ default on a plain static host. What it takes is worked through in
 This is also the reason the next section exists: anything a script can reach on
 this origin includes whatever Spore has stored there.
 
+### Content isolation, where a mirror turns it on
+
+`CONTENT_ISOLATION` in `js/config.js` implements that fix as an option, off by
+default. With it on, the gate frames `<infohash>.<content domain>/relay.html`,
+which frames the site from the same origin, and the browser's origin boundary
+separates the site from the gate and from every other site. What then holds,
+each item checked by `tools/e2e.mjs`, and each check confirmed to fail when the
+code behind it is removed:
+
+- A site with scripts on cannot read or write the gate's `localStorage`, reach
+  its document, or see its service worker — including after setting
+  `document.domain`, which Firefox honours and Chromium ignores. The gate never
+  sets `document.domain`, and must not: relaxation needs both sides.
+- The site's origin serves one torrent, the one in its hostname. Its worker
+  refuses any other; the gate independently refuses too.
+- The gate answers only the relay frame it created, identified by
+  `event.source`, and takes the infohash from `event.origin` — which a page
+  cannot forge — never from the message.
+- The site's worker asks the relay, not the site, for files and for the scripts
+  policy, so a scripted site cannot answer those questions ahead of it.
+- Relayed requests are served by WebTorrent's own `wrapRequest`, the same code
+  as the shared-origin path, so ranges and streaming are not reimplemented.
+
+What it does not change: the relay is not a boundary between the site and
+itself — a scripted site shares the relay's origin and can reach it, which
+affects nothing but that site. Egress, CSP and the sandbox are as before.
+
+Not yet verified: **WebKit.** Chromium 151 and Firefox 142 were measured;
+whether WebKit registers and applies a service worker inside a same-site,
+cross-origin frame has not been, because no WebKit was available. Until it is,
+treat isolation on iOS as unproven. The content host must also serve the relay
+and nothing else (`deploy/gate/content-isolation.conf.example`), since a
+worker registered from a torrent path is fetched from that host.
+
 ## The gate's own policy
 
 The gate declares its policy in a `<meta>` tag in `index.html`, because a static
