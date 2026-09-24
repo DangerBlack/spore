@@ -76,6 +76,30 @@ make. Put this behind Caddy, Traefik or nginx for a real deployment — or skip
 containers entirely and drop the bundle on any static host, which is what
 [GitHub Pages](../README.md#hosting-it) does.
 
+### Optional: each site on an origin of its own
+
+Off by default, and a plain static mirror cannot turn it on. With it off, a site
+whose scripts a reader enables shares the gate's origin, and so can reach what
+Spore stores for every other site — the gate says so before it asks. With it on,
+each site is shown at `<infohash>.content.your-domain`, which the browser keeps
+apart from the gate and from every other site.
+
+It needs, all three:
+
+- **a wildcard DNS record**, `*.content.your-domain` pointing at this host;
+- **a wildcard certificate** for it — only a DNS challenge (ACME DNS-01) can
+  issue one, so the TLS proxy in front needs a plugin for your DNS provider;
+- **the content host serving the relay and nothing else.**
+  [`gate/content-isolation.conf.example`](gate/content-isolation.conf.example)
+  is an nginx server block that does exactly that, and says why it has to: a
+  service worker's script is always fetched from the network, so the content
+  host must never serve anything at a torrent's paths.
+
+Then set `CONTENT_ISOLATION` in `js/config.js` and add the content domain to
+`frame-src` in `index.html`'s policy; both files say how. Diagnostics shows
+whether it is on. The whole design, and what was measured to justify it, is in
+[`spec/second-origin-isolation.md`](../spec/second-origin-isolation.md).
+
 ## seeder/
 
 ```sh
