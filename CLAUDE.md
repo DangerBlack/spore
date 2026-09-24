@@ -98,6 +98,10 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
 - Non introdurre le feature "Fuori scope" senza che venga chiesto esplicitamente.
 - Mantieni il gate **statico e mirrorabile**: nessuna dipendenza da un dominio
   o da un backend specifico. Deve funzionare identico da qualsiasi mirror.
+- `CONTENT_ISOLATION` (js/config.js) resta `null` nel repository: è un'opzione
+  per i mirror con dominio proprio, DNS e certificato wildcard, mai un default.
+  Ogni modifica deve tenere verdi entrambe le metà di `tools/e2e.mjs`, quella a
+  origin condiviso e quella isolata. Vedi spec/second-origin-isolation.md.
 - Path relativi ovunque; un sito pubblicato deve renderizzare uguale a come
   farebbe servito da un server statico qualsiasi.
 - Ogni scelta che tocca la sicurezza (CSP, sandbox, egress) va motivata nel PR:

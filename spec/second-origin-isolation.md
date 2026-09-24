@@ -1,11 +1,13 @@
 # A second origin for content
 
-**Status: draft. Nothing in this document is implemented, and nothing here is
-scheduled.** It exists so the idea has one place to live between now and
-whenever it gets built, in the manner of [mutable-sites.md](mutable-sites.md).
-The open questions at the end are unresolved, not rhetorical — several of them
-would need to be settled before this could be designed properly, let alone
-built.
+**Status: implemented behind `CONTENT_ISOLATION` in `js/config.js`, off by
+default.** Delivery, the relay, the content-mode worker, Diagnostics and the
+deploy example are built and covered by `tools/e2e.mjs` in Chromium; Firefox was
+checked by hand. Not done: the trust chip and address bar for a site on a
+second hostname (deliberately deferred, below), and any measurement on WebKit.
+The document keeps its earlier, wrong plans visible where the design changed,
+in the manner of [mutable-sites.md](mutable-sites.md), because why a thing is
+not built a certain way is as useful as how it is.
 
 ## The problem
 
@@ -410,11 +412,16 @@ Still genuinely open:
 - **How does the reader's address bar represent a site that rendered on a
   different hostname than the one they typed a magnet into?** This needs an
   answer before the trust chip can be redesigned around it, not after.
-- **Is this worth doing before or after Fase 2's BEP 46/DHT bridge work?**
-  They are independent (one is about *where* content is served, the other
-  about *finding* newer versions of it), but both are large, and only one
-  browser-facing change should probably land at a time.
+- **Does it work on WebKit at all?** Every browser on iOS is WebKit, which
+  already refuses to serve a sandboxed frame from a worker (see `viewer.js`).
+  Whether it registers and applies a worker inside a same-site, cross-origin
+  frame — the whole of this mode — is unmeasured. The standalone probe in
+  "Measured, not assumed" is the test to run on an iPhone first.
+- **Should scripts stay refused where the sandbox is unavailable?** On an engine
+  that will not serve a sandboxed frame, the gate refuses scripts outright,
+  because shared origin with no sandbox is too much to give. With isolation on,
+  the origin is no longer shared, and that reasoning may no longer hold. Left as
+  it was until WebKit is measured, since that is the engine it concerns.
 
-None of these need to be answered to keep using Spore as it is today. They
-need to be answered before this is designed, which is why this document stops
-here instead of proposing one.
+None of these block using Spore as it is, with isolation on or off. The address
+bar question is the one to answer before a second pass redesigns the trust chip.
