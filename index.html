@@ -12,8 +12,8 @@
   service worker gives each of them a far narrower one of its own.
 
   A mirror that turns on CONTENT_ISOLATION (js/config.js) must also let the
-  viewer frame its content domain, e.g. for content.spore.example:
-      frame-src 'self' https://*.content.spore.example;
+  viewer frame its content domain, e.g. for spore-content.example:
+      frame-src 'self' https://*.spore-content.example;
   Without it every site is refused by this policy and none is shown.
 -->
 <meta http-equiv="Content-Security-Policy" content="

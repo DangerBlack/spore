@@ -3613,12 +3613,13 @@ async function checkStuckViewerIsDetected (page) {
  * Content isolation: each site on an origin of its own.
  *
  * A second gate, served with the option on. `spore.localhost` and
- * `<hash>.content.spore.localhost` reach the same local server: the browser
+ * `<hash>.spore-content.localhost` reach the same local server: the browser
  * resolves `*.localhost` to loopback and treats it as a secure context, so no
- * certificate or DNS is involved. The gate's hostname is the *parent* of the
- * content domain on purpose — that makes them same-site but cross-origin, which
- * is the relationship a real deployment has and the one storage partitioning
- * cares about. See spec/second-origin-isolation.md.
+ * certificate or DNS is involved. The content domain is on a different *site*
+ * from the gate, as a real deployment's must be: a content domain under the
+ * gate's could set cookies the gate receives. That makes every site frame a
+ * third-party frame, which is the case storage partitioning applies to — and
+ * the one measured to work. See spec/second-origin-isolation.md.
  *
  * What is checked is the boundary, not only that pages arrive: that a site
  * with scripts on cannot reach the gate's storage or worker, and that the gate
@@ -3635,7 +3636,7 @@ async function runIsolated () {
 
   const isoPort = await freePort()
   const gate = `http://spore.localhost:${isoPort}`
-  const content = `content.spore.localhost:${isoPort}`
+  const content = `spore-content.localhost:${isoPort}`
   const isoServer = spawn(process.execPath, [
     fileURLToPath(new URL('serve.mjs', import.meta.url)), String(isoPort),
     '--isolation', `${gate},${content}`,
@@ -3749,6 +3750,16 @@ async function runIsolated () {
       answer[0] === 403 && answer[1] === 403, JSON.stringify(answer))
     check('isolation: and answers it about its own', answer[2] === 200, JSON.stringify(answer))
 
+    // A malformed escape would throw inside WebTorrent's handler and hang until
+    // the worker's 504; the gate refuses it before it gets that far.
+    const malformed = await relay.evaluate(async url => {
+      const started = Date.now()
+      const res = await fetch(url)
+      return { status: res.status, ms: Date.now() - started }
+    }, `/webtorrent/${infoHash}/%E0%A4`)
+    check('isolation: a malformed path is refused at once, not left to time out',
+      malformed.status === 400 && malformed.ms < 5000, JSON.stringify(malformed))
+
     // --- scripts on: the boundary this whole mode exists for -----------------
     asked.length = 0
     await page.click('#scripts-toggle')
@@ -3793,6 +3804,11 @@ async function runIsolated () {
       const registrations = await navigator.serviceWorker.getRegistrations()
       result.workers = registrations.map(r => new URL(r.scope).origin)
       await Promise.all(registrations.map(r => r.unregister()))
+      // And leaves one behind that would outlive scripts being turned off: a
+      // narrower scope controls the site's pages ahead of the relay's worker.
+      await navigator.serviceWorker.register(
+        `/sw.js?gate=${encodeURIComponent('http://evil.localhost')}`, { scope: '/webtorrent/' })
+        .then(() => { result.plantedWorker = true }, err => { result.plantedWorker = err.name })
       return result
     })
     check('isolation: a scripted site cannot read the gate\'s storage',
@@ -3821,12 +3837,36 @@ async function runIsolated () {
     check('isolation: unregistering every worker it could see left the gate\'s alone',
       gateSide.worker === true)
 
-    // It broke its own origin's worker; showing it again must repair that.
+    // It broke its own origin's worker and planted another; showing it again
+    // must repair both, or the site stays blank after scripts are off.
+    check('isolation: (a scripted site could plant a narrower worker to test this against)',
+      reach.plantedWorker === true, reach.plantedWorker)
     await page.click('#scripts-toggle')
     const off = await settle(page, () => document.getElementById('probe')?.textContent,
       text => text === 'Scripts are off.')
-    check('isolation: turning scripts off takes effect, and the relay re-registers its worker',
+    check('isolation: turning scripts off takes effect, and the relay repairs its origin\'s workers',
       off === 'Scripts are off.', off)
+    const workersAfter = await (page.frames().find(f => f.url().includes('/relay.html')))
+      .evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(r => new URL(r.scope).pathname))
+    check('isolation: only the relay\'s own registration is left', JSON.stringify(workersAfter) === '["/"]',
+      JSON.stringify(workersAfter))
+
+    // --- a configuration that would put sites on the gate's own site --------
+    const badPort = await freePort()
+    const badServer = spawn(process.execPath, [
+      fileURLToPath(new URL('serve.mjs', import.meta.url)), String(badPort),
+      '--isolation', `http://spore.localhost:${badPort},content.spore.localhost:${badPort}`
+    ], { stdio: 'ignore' })
+    try {
+      await wait(500)
+      await page.goto(`http://spore.localhost:${badPort}/`, { waitUntil: 'load' })
+      await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 20_000 })
+      const said = await page.$eval('#error', e => e.textContent)
+      check('isolation: a content domain under the gate\'s own is refused, and the gate says why',
+        /different domain from the gate/.test(said), said.trim().slice(0, 120))
+    } finally {
+      badServer.kill()
+    }
   } finally {
     await page.close()
     isoServer.kill()

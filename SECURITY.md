@@ -220,12 +220,35 @@ code behind it is removed:
 - Relayed requests are served by WebTorrent's own `wrapRequest`, the same code
   as the shared-origin path, so ranges and streaming are not reimplemented.
 
+- The relay removes any other service worker registration on its origin before
+  showing the site, so one a scripted site planted cannot outlive the reader
+  turning scripts off.
+
+**The content domain must be a different registrable domain from the gate's.**
+The origin boundary holds either way, but the *site* boundary does not: under
+the gate's domain a site could set cookies the gate receives (enough of them to
+make the host refuse the gate's own requests), and Chromium isolates processes
+per site, not per origin. The gate refuses a content domain under its own; a
+sibling under a shared parent cannot be detected without the Public Suffix
+List, so the documentation says it instead.
+
+**Residual, unless the content domain is on the Public Suffix List:** every
+site shares that one registrable domain with every other. Two sites with
+scripts on can then set and read a cookie on it to recognise the same reader,
+and one can fill it with cookies until the content host refuses requests,
+blanking every isolated site for that reader until cookies are cleared.
+Listing the domain, as `github.io` is, makes each site its own site and closes
+both.
+
 What it does not change: the relay is not a boundary between the site and
 itself — a scripted site shares the relay's origin and can reach it, which
-affects nothing but that site. Egress, CSP and the sandbox are as before.
+affects nothing but that site. Nor is a site stopped from sending the gate as
+many requests for its own files as it likes; that costs the gate tab work and
+reaches no one else's data, and a scripted page could burn its own tab anyway.
+Egress, CSP and the sandbox are as before.
 
 Not yet verified: **WebKit.** Chromium 151 and Firefox 142 were measured;
-whether WebKit registers and applies a service worker inside a same-site,
+whether WebKit registers and applies a service worker inside a third-party
 cross-origin frame has not been, because no WebKit was available. Until it is,
 treat isolation on iOS as unproven. The content host must also serve the relay
 and nothing else (`deploy/gate/content-isolation.conf.example`), since a

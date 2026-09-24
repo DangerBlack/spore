@@ -59,6 +59,7 @@ async function start () {
     `./sw.js?gate=${encodeURIComponent(isolation.gate)}`,
     { scope: './', updateViaCache: 'none' })
   await activated(registration)
+  await removeOthers(registration)
   setInterval(() => fetch(`./${TORRENT_PATH}/keepalive/`).catch(() => {}), KEEPALIVE_MS)
 
   show(`./${TORRENT_PATH}/${infoHash}/${path}`, {
@@ -100,20 +101,43 @@ function forward (event) {
   }
 }
 
+/**
+ * Every worker state is watched, the active one included: a reload during
+ * activation finds `active` present but still `activating`, and watching only
+ * the others left this waiting out its whole timeout.
+ */
 function activated (registration) {
-  const worker = registration.active ?? registration.waiting ?? registration.installing
-  if (worker?.state === 'activated') return Promise.resolve()
-
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error('its worker did not start')), ACTIVATE_TIMEOUT_MS)
-    const watch = w => w?.addEventListener('statechange', () => {
-      if (w.state === 'activated') { clearTimeout(timer); resolve() }
-    })
-    watch(registration.installing)
-    watch(registration.waiting)
-    registration.addEventListener('updatefound', () => watch(registration.installing))
+    const check = () => {
+      if (registration.active?.state !== 'activated') return false
+      clearTimeout(timer)
+      resolve()
+      return true
+    }
+    if (check()) return
+    for (const worker of [registration.installing, registration.waiting, registration.active]) {
+      worker?.addEventListener('statechange', check)
+    }
+    registration.addEventListener('updatefound',
+      () => registration.installing?.addEventListener('statechange', check))
   })
+}
+
+/**
+ * Only this page's own registration may stay.
+ *
+ * A site with scripts on shares this origin and can register Spore's `sw.js`
+ * itself — with a narrower scope, say `/webtorrent/`, which then controls the
+ * site's pages ahead of the relay's. It fails closed (it has no relay to ask,
+ * so it answers nothing), but it outlives the reader turning scripts off and
+ * leaves the site blank until removed. So it is removed, every time.
+ */
+async function removeOthers (registration) {
+  for (const other of await navigator.serviceWorker.getRegistrations()) {
+    if (other.scope !== registration.scope) await other.unregister()
+  }
 }
 
 function show (src, { scripts, sandbox }) {
