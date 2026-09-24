@@ -70,6 +70,20 @@ export function sandboxWorks () {
 }
 
 /**
+ * What the relay last said about the site it framed, with content isolation
+ * on — the only view the gate has into a frame on another origin. For
+ * Diagnostics. The reason is the relay's own text, from a page a site with
+ * scripts on can reach, so it is shown as text and nothing more.
+ *
+ * @type {{arrived: boolean, reason: string|null}|null}
+ */
+let lastRelayReport = null
+
+export function relayReport () {
+  return lastRelayReport
+}
+
+/**
  * Ask the worker for a page from inside a sandboxed frame, and see if it
  * arrives. Runs once, on a hidden frame, and settles before any site is shown.
  */
@@ -233,8 +247,13 @@ export class Viewer {
   }
 
   /** The relay's word on whether its site arrived. Stale reports are ignored. */
-  relayReported (relay, arrived) {
-    if (this.pending?.url === relay) this.pending.finish(arrived === true)
+  relayReported (relay, arrived, reason) {
+    if (this.pending?.url !== relay) return
+    lastRelayReport = {
+      arrived: arrived === true,
+      reason: typeof reason === 'string' ? reason.slice(0, 200) : null
+    }
+    this.pending.finish(arrived === true)
   }
 
   /**

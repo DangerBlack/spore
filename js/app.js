@@ -233,7 +233,7 @@ async function boot () {
       server: getServer(),
       scope: registration.scope,
       frame: () => ui.viewer.frame.contentWindow,
-      onShown: (infoHash, report) => ui.viewer.relayReported(report.relay, report.arrived)
+      onShown: (infoHash, report) => ui.viewer.relayReported(report.relay, report.arrived, report.reason)
     })
   } catch (err) {
     return fail(err)
