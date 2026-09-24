@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Served only on a site's own origin (<infohash>.<content domain>), and only when
+  the mirror has turned on CONTENT_ISOLATION. It frames the site and passes its
+  worker's questions to the gate; see js/relay.js.
+
+  Its own policy. The site inside gets a far narrower one from sw.js, per
+  response. Inline style is allowed because this page has nothing in it but a
+  frame and, if something goes wrong, a sentence — none of it anyone else's.
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'unsafe-inline';
+  frame-src 'self';
+  worker-src 'self';
+  connect-src 'self';
+  base-uri 'none';
+  form-action 'none';
+  object-src 'none'">
+<title>Spore</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; }
+  iframe { display: block; width: 100%; height: 100%; border: 0; }
+  p { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #333; }
+</style>
+</head>
+<body>
+<script type="module" src="js/relay.js"></script>
+</body>
+</html>

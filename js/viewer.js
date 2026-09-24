@@ -187,6 +187,57 @@ export class Viewer {
   }
 
   /**
+   * Show a site through its own origin's relay (content isolation on).
+   *
+   * The frame here is relay.html on the site's origin, which frames the site.
+   * It needs scripts to do that, so it is sandboxed with scripts and its own
+   * origin; the site inside gets its own, narrower, flags from the relay, and
+   * flags only ever narrow on the way down. Where the engine will not serve a
+   * sandboxed frame at all, neither frame carries one — the same fallback, and
+   * the same question to the reader, as the shared-origin viewer.
+   *
+   * Arrival cannot be checked by reading the frame, which is cross-origin now,
+   * so this waits for the relay to say — see `relayReported`.
+   *
+   * @param {string} url  from isolation.js's `relayURL`
+   * @returns {Promise<boolean>} whether the site actually arrived
+   */
+  async showRelay (url) {
+    await this.clear()
+
+    if (sandboxIsServed === false && this.frame.hasAttribute('sandbox')) {
+      this.frame = this.withoutSandbox()
+    } else if (sandboxIsServed !== false) {
+      this.frame.setAttribute('sandbox', 'allow-same-origin allow-scripts')
+    }
+
+    const settled = new Promise(resolve => {
+      const pending = {
+        url,
+        finish: arrived => {
+          clearTimeout(timer)
+          if (this.pending === pending) this.pending = null
+          resolve(arrived)
+        }
+      }
+      // The relay's own clock is LOAD_TIMEOUT_MS from when it frames the site;
+      // starting its worker comes first, so allow for that too.
+      const timer = setTimeout(() => pending.finish(false), LOAD_TIMEOUT_MS * 2)
+      this.pending?.finish(false)
+      this.pending = pending
+    })
+
+    this.frame.src = url
+    this.frame.hidden = false
+    return settled
+  }
+
+  /** The relay's word on whether its site arrived. Stale reports are ignored. */
+  relayReported (relay, arrived) {
+    if (this.pending?.url === relay) this.pending.finish(arrived === true)
+  }
+
+  /**
    * Did the frame really end up showing that page?
    *
    * The `load` event is not the answer on its own: a navigation the browser

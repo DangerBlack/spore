@@ -36,6 +36,16 @@ const TRACKERS = args.includes('--trackers')
   : null
 const PORT = Number(args.find(a => /^\d+$/.test(a)) ?? 8080)
 
+// Test hook, the same shape: `--isolation <gate origin>,<content domain>` turns
+// content isolation on for this run only, by rewriting CONTENT_ISOLATION in
+// js/config.js and adding the content domain to index.html's frame-src. Every
+// hostname reaches this one server, so `spore.localhost` and
+// `<hash>.content.spore.localhost` need nothing but a browser that treats
+// `*.localhost` as loopback and as a secure context, which current ones do.
+const ISOLATION = args.includes('--isolation')
+  ? (([gate, content]) => ({ gate, content }))(args[args.indexOf('--isolation') + 1].split(','))
+  : null
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -67,10 +77,25 @@ const handler = async (req, res) => {
     'Cache-Control': 'no-store'
   }
 
-  if (TRACKERS && target.endsWith(join('js', 'config.js'))) {
-    const body = readFileSync(target, 'utf8').replace(
-      /export const DEFAULT_TRACKERS = \[[^\]]*\]/,
-      `export const DEFAULT_TRACKERS = ${JSON.stringify(TRACKERS)}`)
+  if ((TRACKERS || ISOLATION) && target.endsWith(join('js', 'config.js'))) {
+    let body = readFileSync(target, 'utf8')
+    if (TRACKERS) {
+      body = body.replace(
+        /export const DEFAULT_TRACKERS = \[[^\]]*\]/,
+        `export const DEFAULT_TRACKERS = ${JSON.stringify(TRACKERS)}`)
+    }
+    if (ISOLATION) {
+      body = replaceOnce(body, 'export const CONTENT_ISOLATION = null',
+        `export const CONTENT_ISOLATION = ${JSON.stringify(ISOLATION)}`)
+    }
+    res.writeHead(200, headers)
+    return res.end(body)
+  }
+
+  if (ISOLATION && target === join(ROOT, 'index.html')) {
+    const scheme = new URL(ISOLATION.gate).protocol
+    const body = replaceOnce(readFileSync(target, 'utf8'),
+      "frame-src 'self';", `frame-src 'self' ${scheme}//*.${ISOLATION.content};`)
     res.writeHead(200, headers)
     return res.end(body)
   }
@@ -100,6 +125,15 @@ server.listen(PORT, () => {
       'and Spore works normally.')
   }
 })
+
+/**
+ * A test hook that silently rewrote nothing would test the default instead of
+ * what it claims to, and pass. So a missing target is fatal.
+ */
+function replaceOnce (text, from, to) {
+  if (!text.includes(from)) throw new Error(`serve.mjs: cannot find "${from}" to rewrite`)
+  return text.replace(from, to)
+}
 
 /** Every non-loopback IPv4 address, so the URL to type on a phone is printed. */
 function lanAddresses () {

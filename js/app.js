@@ -31,7 +31,8 @@ import {
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
-import { SiteNotFound, getClient, openTorrent, startClient, startWorker } from './swarm.js'
+import { SiteNotFound, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
+import { answerRelays, isolation, isolationProblem, relayURL } from './isolation.js'
 import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
@@ -223,8 +224,17 @@ async function boot () {
   watchTheWorker()
 
   try {
+    // A mirror that asked for isolation and got its configuration wrong would
+    // otherwise frame every site at an address that does not exist.
+    if (isolationProblem) throw isolationProblem
     const registration = await startWorker()
     startClient(registration)
+    answerRelays({
+      server: getServer(),
+      scope: registration.scope,
+      frame: () => ui.viewer.frame.contentWindow,
+      onShown: (infoHash, report) => ui.viewer.relayReported(report.relay, report.arrived)
+    })
   } catch (err) {
     return fail(err)
   }
@@ -460,6 +470,17 @@ function stopJoining () {
   joiningTimer = null
 }
 
+/**
+ * Put one file of a torrent in the viewer, on whichever origin this gate uses:
+ * its own, or — with content isolation on — the torrent's.
+ *
+ * @returns {Promise<boolean>} whether the page actually arrived
+ */
+function showInViewer (infoHash, path, { scripts }) {
+  if (!isolation) return ui.viewer.show(entryURL(infoHash, path), { scripts })
+  return ui.viewer.showRelay(relayURL(infoHash, path, { scripts, sandbox: sandboxWorks() !== false }))
+}
+
 async function render (torrent, entry) {
   // Asked before anything is shown, not after. On an engine that cannot serve
   // a sandboxed frame the reader is accepting a real, if narrow, loss, and
@@ -478,7 +499,7 @@ async function render (torrent, entry) {
   ui.keepLabel.hidden = false
   ui.saveTorrent.hidden = false
   ui.shareOpen.hidden = false
-  const shown = ui.viewer.show(entryURL(torrent.infoHash, entry), { scripts: allowed })
+  const shown = showInViewer(torrent.infoHash, entry, { scripts: allowed })
   ui.welcome.hidden = true
   ui.notice.hidden = true
   ui.error.hidden = true
@@ -1524,12 +1545,28 @@ async function warnViewerStuck () {
 
 /**
  * What the reader is agreeing to. It has to be true of this gate, not of a
- * better one: sites share Spore's own origin here, so a script on one of them
- * can do everything Spore can do in this browser, to every site, not just to
- * itself. An earlier version said "this does not apply to any other site",
- * and that was the opposite of the truth.
+ * better one, so there are two and the configuration picks.
+ *
+ * Shared origin — the default, and every plain static mirror: a script on one
+ * site can do everything Spore can do in this browser, to every site, not
+ * just to itself. An earlier version said "this does not apply to any other
+ * site", and that was the opposite of the truth.
+ *
+ * Content isolation on: the browser keeps the site on an origin of its own,
+ * so what it can reach is itself. It can still lie with what it shows.
  */
-const SCRIPTS_WARNING = `Run this site's scripts?
+const ISOLATED_SCRIPTS_WARNING = `Run this site's scripts?
+
+This gate shows each site from an address of its own, which the browser keeps
+apart from Spore and from every other site. Its scripts cannot read or change
+what Spore keeps for other sites, cannot use a publishing key kept on this
+device, and cannot reach the network outside its own torrent.
+
+They can still change anything this site shows you — including drawing
+something that looks like Spore's own controls — so only enable this for a site
+you trust.`
+
+const SHARED_SCRIPTS_WARNING = `Run this site's scripts?
 
 This gate shows every site from its own address, so this site's scripts get the
 same access to this browser that Spore itself has. A hostile site could:
@@ -1543,6 +1580,8 @@ same access to this browser that Spore itself has. A hostile site could:
 It still cannot send anything outside its own torrent over the network.
 
 Only enable this for a site you would trust as much as Spore itself.`
+
+const SCRIPTS_WARNING = isolation ? ISOLATED_SCRIPTS_WARNING : SHARED_SCRIPTS_WARNING
 
 /**
  * Flipping the switch reloads the site: the policy travels on response headers,
@@ -1567,7 +1606,7 @@ async function onScriptsToggle () {
   setScriptsAllowed(torrent.infoHash, ui.scripts.checked)
 
   const entry = findEntry(torrent)
-  const shown = await ui.viewer.show(entryURL(torrent.infoHash, entry), { scripts: ui.scripts.checked })
+  const shown = await showInViewer(torrent.infoHash, entry, { scripts: ui.scripts.checked })
   if (!shown) warnViewerStuck()
 }
 
@@ -1747,7 +1786,7 @@ function listedFile (torrent, file) {
   // of a listing has had even less scrutiny than a site someone linked to.
   open.addEventListener('click', () => {
     ui.listing.hidden = true
-    ui.viewer.show(entryURL(torrent.infoHash, path), { scripts: false })
+    showInViewer(torrent.infoHash, path, { scripts: false })
   })
 
   const item = document.createElement('li')

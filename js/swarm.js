@@ -165,14 +165,26 @@ function controllerChange (timeout) {
   ])
 }
 
+/**
+ * The server `createServer()` returns. Kept because, with content isolation on,
+ * requests from a site's own origin are handed to the same server — see
+ * js/isolation.js.
+ */
+let server = null
+
 /** Create the singleton client and point the worker at it. */
 export function startClient (registration) {
   if (client) return client
   client = new WebTorrent()
   // The worker derives its own path prefix from the registration scope, which
   // is why the gate works unchanged whether it is hosted at / or at /spore/.
-  client.createServer({ controller: registration })
+  server = client.createServer({ controller: registration })
   return client
+}
+
+export function getServer () {
+  if (!server) throw new Error('The swarm client has not been started.')
+  return server
 }
 
 export function getClient () {
