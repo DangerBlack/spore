@@ -202,6 +202,55 @@ buys architectural cleanliness, not an additional trust boundary — document it
 that way in the code, not as a security control, so nobody later relies on it
 being one.
 
+### Measured, not assumed
+
+Before any of this was written into the gate, the platform behavior it relies
+on was checked with a standalone probe — two tiny pages and a trivial worker,
+no Spore code — in Chromium 151 and Firefox 142, gate at `spore.localhost`,
+content at `<40 hex>.content.spore.localhost`. That pair was chosen on purpose:
+in production `gate.example` and `<hash>.content.example` are *same-site but
+cross-origin*, and storage partitioning treats cross-site frames differently,
+so a test on two unrelated hostnames would have measured the wrong thing.
+
+Both engines agreed on everything that matters:
+
+- Both hostnames are secure contexts over plain `http`, because `*.localhost`
+  is treated like `localhost`. Development and CI therefore need no
+  certificate, no DNS and no proxy — only real deployments do.
+- A content-origin frame nested in the gate registers its own service worker
+  and is controlled by it.
+- The gate sees the relay's exact origin in `event.origin`, and can confirm
+  `event.source` is the frame it created.
+- A document on the content origin cannot read the gate's `localStorage`
+  (`SecurityError`), before or after trying `document.domain`.
+- A request made by the innermost document, answered by the content origin's
+  worker, relayed through `relay.html` to the gate and back, arrives intact.
+- The innermost document *can* reach `relay.html`'s DOM. Expected: they share
+  an origin. This is the nested-iframe point above, confirmed.
+
+One difference, and it produces an invariant: **Firefox honours
+`document.domain = 'spore.localhost'` from the content origin; Chromium
+ignores it** (origin-keyed agent clusters). Access stays blocked in both,
+because relaxation only works when both sides opt in and the gate never does.
+So the gate must never assign `document.domain`, and nothing can enforce that
+from a static host — the header that would (`Origin-Agent-Cluster`) needs a
+server. It is a rule for the code, and the end-to-end suite should assert that
+a content frame which sets `document.domain` is still refused.
+
+Two more rules fell out of building the probe:
+
+- **The hostname is built from the infohash, so the infohash must be validated
+  as exactly `/^[0-9a-f]{40}$/` at the point the hostname is built**, not
+  trusted because it came from WebTorrent. A value containing a dot would
+  address a different subdomain — someone else's torrent. Forty characters
+  also fits DNS's 63-character label limit; a BitTorrent v2 infohash (64 hex)
+  would not, which is fine only because Spore reads v1 magnets alone
+  (`js/magnet.js`). If v2 support ever arrives, this scheme has to change with
+  it.
+- **Tests must use a gate hostname that is the parent of the content
+  hostnames** (`spore.localhost` / `*.content.spore.localhost`), never two
+  sibling names, for the same-site reason above.
+
 ### Sketch of the pieces
 
     gate.example                                 (has the WebTorrent client)
