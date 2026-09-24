@@ -22,6 +22,31 @@ export const DEFAULT_TRACKERS = [
 export const TORRENT_PATH = 'webtorrent'
 
 /**
+ * Show each site on an origin of its own: `<infohash>.<content>`.
+ *
+ * Off, and it must stay off unless the mirror really runs what it needs: a
+ * wildcard DNS record and a wildcard certificate for `*.<content>`, and a host
+ * that serves this bundle's own files there and nothing else. A plain static
+ * host — GitHub Pages without a domain of your own — cannot, and a gate that
+ * turns this on without them shows no site at all.
+ *
+ * The one exception to "nothing here names a host", and deliberately: this is
+ * the mirror operator describing their own infrastructure, which no bundle can
+ * guess. Turning it on also means adding `<scheme>//*.<content>` to
+ * `frame-src` in the policy at the top of index.html.
+ *
+ * What it buys, and why it is worth the trouble where it can be had: a site
+ * whose scripts the reader enables no longer shares an origin with Spore, so it
+ * cannot reach what Spore stores for other sites. See
+ * spec/second-origin-isolation.md.
+ *
+ * @type {null | { gate: string, content: string }}
+ *   `gate` is this gate's own origin, e.g. `https://spore.example`;
+ *   `content` the domain sites live under, e.g. `content.spore.example`.
+ */
+export const CONTENT_ISOLATION = null
+
+/**
  * How long to wait for a torrent's metadata, expressed as two clocks.
  *
  * A single deadline was wrong, and wrong in a way that made live sites look
@@ -59,7 +84,7 @@ export const METADATA_SILENT_MS = 30_000
  * been updated, and the symptom is that everything reports healthy while
  * nothing renders — so Diagnostics compares them and flags a mismatch.
  */
-export const EXPECTED_WORKER_VERSION = '2026-09-13.1'
+export const EXPECTED_WORKER_VERSION = '2026-09-24.1'
 
 /**
  * Which build of the gate this is.

@@ -130,10 +130,21 @@ const browser = await puppeteer.launch({
 })
 
 try {
-  await run()
-} catch (err) {
-  console.error('\nThe check itself broke:', err.stack ?? err.message)
-  results.push({ name: 'suite completed', pass: false })
+  if (!flag('--only-isolation')) {
+    try {
+      await run()
+    } catch (err) {
+      console.error('\nThe check itself broke:', err.stack ?? err.message)
+      results.push({ name: 'suite completed', pass: false })
+    }
+  }
+  // Separate, so a failure in either cannot hide the other.
+  try {
+    await runIsolated()
+  } catch (err) {
+    console.error('\nThe isolation check itself broke:', err.stack ?? err.message)
+    results.push({ name: 'isolation suite completed', pass: false })
+  }
 } finally {
   await browser.close()
   server.kill()
@@ -3590,6 +3601,214 @@ async function checkStuckViewerIsDetected (page) {
 
   check('a viewer that never navigates is detected', result.refused === false, JSON.stringify(result))
   check('a viewer that does navigate is not falsely accused', result.accepted === true, JSON.stringify(result))
+}
+
+/**
+ * Content isolation: each site on an origin of its own.
+ *
+ * A second gate, served with the option on. `spore.localhost` and
+ * `<hash>.content.spore.localhost` reach the same local server: the browser
+ * resolves `*.localhost` to loopback and treats it as a secure context, so no
+ * certificate or DNS is involved. The gate's hostname is the *parent* of the
+ * content domain on purpose — that makes them same-site but cross-origin, which
+ * is the relationship a real deployment has and the one storage partitioning
+ * cares about. See spec/second-origin-isolation.md.
+ *
+ * What is checked is the boundary, not only that pages arrive: that a site
+ * with scripts on cannot reach the gate's storage or worker, and that the gate
+ * answers a content origin about its own torrent and no other.
+ */
+async function runIsolated () {
+  const isoPort = await freePort()
+  const gate = `http://spore.localhost:${isoPort}`
+  const content = `content.spore.localhost:${isoPort}`
+  const isoServer = spawn(process.execPath, [
+    fileURLToPath(new URL('serve.mjs', import.meta.url)), String(isoPort),
+    '--isolation', `${gate},${content}`,
+    ...(tracker ? ['--trackers', trackerURL] : [])
+  ], { stdio: 'ignore' })
+
+  const page = await browser.newPage()
+  const asked = []
+  page.on('dialog', async dialog => { asked.push(dialog.message()); await dialog.accept() })
+
+  try {
+    await wait(500)
+    await page.goto(gate + '/', { waitUntil: 'load' })
+    await page.waitForFunction(
+      () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+    check('isolation: a gate configured for it boots', true)
+
+    const infoHash = await page.evaluate(async (site, paths) => {
+      const files = []
+      for (const path of paths) {
+        const res = await fetch(`/${site}/${path}`)
+        const file = new File([await res.blob()], path.split('/').pop())
+        file.fullPath = `${site}/${path}`
+        files.push(file)
+      }
+      const { publish } = await import('/js/publish.js')
+      return (await publish(files, site)).infoHash
+    }, SITE, SITE_FILES)
+    const siteOrigin = `http://${infoHash}.${content}`
+
+    await page.evaluate(hash => { location.hash = hash }, infoHash)
+    await page.waitForFunction(() => {
+      const frame = document.getElementById('viewer')
+      return !frame.hidden && frame.src.includes('/relay.html')
+    }, { timeout: 20_000 })
+
+    const viewer = await page.$eval('#viewer', f => ({ src: f.src, sandbox: f.getAttribute('sandbox') }))
+    check('isolation: the viewer frames the site\'s own origin, not the gate\'s',
+      viewer.src.startsWith(`${siteOrigin}/relay.html?`), viewer.src)
+    check('isolation: the relay is sandboxed with only what it needs',
+      viewer.sandbox === 'allow-same-origin allow-scripts', viewer.sandbox)
+
+    const site = await siteFrame(page)
+    const rendered = await site.evaluate(() => ({
+      origin: location.origin,
+      heading: document.querySelector('h1')?.textContent,
+      colour: getComputedStyle(document.querySelector('h1')).color,
+      image: document.images[0]?.complete && document.images[0]?.naturalWidth > 0,
+      probe: document.getElementById('probe')?.textContent,
+      sandbox: window.frameElement?.getAttribute('sandbox')
+    }))
+    check('isolation: the site renders from its own origin', rendered.origin === siteOrigin &&
+      rendered.heading === 'Spore', `${rendered.origin} ${rendered.heading}`)
+    check('isolation: its stylesheet and image arrive through the relay',
+      rendered.colour === 'rgb(47, 143, 69)' && rendered.image === true, rendered.colour)
+    check('isolation: scripts are off by default',
+      rendered.probe === 'Scripts are off.' && rendered.sandbox === 'allow-same-origin', rendered.probe)
+    check('isolation: the gate does not call a site that arrived stuck',
+      await page.$eval('#notice', n => n.hidden || !n.textContent.includes('stayed blank')))
+
+    // The policy the site's own worker sends. Read from the relay, which shares
+    // the site's origin and is allowed to fetch.
+    const relay = page.frames().find(f => f.url().includes('/relay.html'))
+    const entry = viewer.src.includes('path=') ? new URL(viewer.src).searchParams.get('path') : ''
+    const policy = await relay.evaluate(async url => {
+      const res = await fetch(url)
+      await res.text()
+      return res.headers.get('content-security-policy')
+    }, `/webtorrent/${infoHash}/${entry}`)
+    check('isolation: the site may be framed by the relay and the gate, and nothing else',
+      policy?.includes(`frame-ancestors 'self' ${gate}`), policy?.match(/frame-ancestors [^;]*/)?.[0])
+    check('isolation: the site\'s policy still denies scripts and egress',
+      policy?.includes("script-src 'none'") && policy?.includes("connect-src 'none'"))
+
+    const otherHash = 'b'.repeat(40)
+    // Refused by the site's own worker, before the gate is even asked — the
+    // text says which layer answered, so each one is checked on its own.
+    const foreign = await relay.evaluate(async url => {
+      const res = await fetch(url)
+      return `${res.status} ${await res.text()}`
+    }, `/webtorrent/${otherHash}/index.html`)
+    check('isolation: a site\'s origin serves no other torrent',
+      foreign === '403 This address serves one site only.', foreign)
+
+    // The gate is the one that must refuse, whatever a content origin asks.
+    // Posted from the relay's own window — the only one the gate listens to —
+    // naming another torrent's file.
+    const answer = await relay.evaluate((gateOrigin, other, own) => new Promise(resolve => {
+      const ask = url => new Promise(done => {
+        const { port1, port2 } = new MessageChannel()
+        port1.onmessage = ({ data }) => { port1.postMessage(false); done(data.status) }
+        parent.postMessage({ spore: 'relay/request', request: { url, method: 'GET', headers: {} } },
+          gateOrigin, [port2])
+        setTimeout(() => done('no answer'), 5000)
+      })
+      Promise.all([
+        ask(`${location.origin}/webtorrent/${other}/index.html`),
+        ask(`http://${other}.${location.host.split('.').slice(1).join('.')}/webtorrent/${other}/index.html`),
+        ask(`${location.origin}/webtorrent/${own}`)
+      ]).then(resolve)
+    }), gate, otherHash, `${infoHash}/${entry}`)
+    check('isolation: the gate refuses a content origin asking for another torrent',
+      answer[0] === 403 && answer[1] === 403, JSON.stringify(answer))
+    check('isolation: and answers it about its own', answer[2] === 200, JSON.stringify(answer))
+
+    // --- scripts on: the boundary this whole mode exists for -----------------
+    asked.length = 0
+    await page.click('#scripts-toggle')
+    const on = await settle(page, () => document.getElementById('probe')?.textContent,
+      text => text === 'Scripts are on for this site.')
+    check('isolation: the reader can still turn scripts on', on === 'Scripts are on for this site.', on)
+    check('isolation: and is told the site is kept apart, not warned it reaches everything',
+      /address of its own/.test(asked[0] ?? '') && !/every site:/.test(asked[0] ?? ''),
+      (asked[0] ?? '').split('\n')[2])
+
+    await page.evaluate(() => localStorage.setItem('spore.isolation-canary', 'gate-only'))
+    const scripted = await siteFrame(page)
+    const reach = await scripted.evaluate(async () => {
+      const attempt = fn => { try { return fn() } catch (err) { return `refused: ${err.name}` } }
+      const result = {
+        readGate: attempt(() => top.localStorage.getItem('spore.isolation-canary')),
+        writeGate: attempt(() => { top.localStorage.setItem('spore.scripts-allowed', '["x"]'); return 'wrote' }),
+        gateDocument: attempt(() => top.document.title),
+        ownStorage: attempt(() => localStorage.getItem('spore.isolation-canary'))
+      }
+      // Relaxation needs both sides; the gate never opts in, so this must not help.
+      attempt(() => { document.domain = 'spore.localhost' })
+      result.afterDomain = attempt(() => top.localStorage.getItem('spore.isolation-canary'))
+      // The gate listens to the relay it framed and to nothing else, even from
+      // the same origin: a request posted by the site itself goes unanswered.
+      result.gateAnswersSite = await new Promise(resolve => {
+        const { port1, port2 } = new MessageChannel()
+        port1.onmessage = ({ data }) => { port1.postMessage(false); resolve(data.status) }
+        top.postMessage({ spore: 'relay/request',
+          request: { url: document.URL, method: 'GET', headers: {} } }, '*', [port2])
+        setTimeout(() => resolve('no answer'), 3000)
+      })
+      // Its worker's questions go to the relay, never to the site: count what
+      // reaches this window while it makes a request that needs an answer.
+      let overheard = 0
+      navigator.serviceWorker.addEventListener('message', () => { overheard++ })
+      navigator.serviceWorker.startMessages()
+      await (await fetch(document.URL, { cache: 'no-store' })).text()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      result.overheard = overheard
+      // Everything it can see of workers is its own origin's.
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      result.workers = registrations.map(r => new URL(r.scope).origin)
+      await Promise.all(registrations.map(r => r.unregister()))
+      return result
+    })
+    check('isolation: a scripted site cannot read the gate\'s storage',
+      String(reach.readGate).startsWith('refused'), reach.readGate)
+    check('isolation: nor write to it', String(reach.writeGate).startsWith('refused'), reach.writeGate)
+    check('isolation: nor reach the gate\'s document', String(reach.gateDocument).startsWith('refused'),
+      reach.gateDocument)
+    check('isolation: and setting document.domain changes nothing',
+      String(reach.afterDomain).startsWith('refused'), reach.afterDomain)
+    check('isolation: its own storage is its own, empty of the gate\'s', reach.ownStorage === null,
+      reach.ownStorage)
+    check('isolation: the gate ignores a request posted by the site instead of its relay',
+      reach.gateAnswersSite === 'no answer', reach.gateAnswersSite)
+    check('isolation: the site\'s worker asks the relay, and the site overhears nothing',
+      reach.overheard === 0, reach.overheard)
+    check('isolation: the only workers it can see are its own origin\'s',
+      reach.workers.every(o => o === siteOrigin), JSON.stringify(reach.workers))
+
+    const gateSide = await page.evaluate(async () => ({
+      canary: localStorage.getItem('spore.isolation-canary'),
+      allowed: localStorage.getItem('spore.scripts-allowed'),
+      worker: !!(await navigator.serviceWorker.getRegistration())
+    }))
+    check('isolation: the gate\'s storage is untouched', gateSide.canary === 'gate-only' &&
+      !String(gateSide.allowed).includes('"x"'), JSON.stringify(gateSide))
+    check('isolation: unregistering every worker it could see left the gate\'s alone',
+      gateSide.worker === true)
+
+    // It broke its own origin's worker; showing it again must repair that.
+    await page.click('#scripts-toggle')
+    const off = await settle(page, () => document.getElementById('probe')?.textContent,
+      text => text === 'Scripts are off.')
+    check('isolation: turning scripts off takes effect, and the relay re-registers its worker',
+      off === 'Scripts are off.', off)
+  } finally {
+    await page.close()
+    isoServer.kill()
+  }
 }
 
 /**

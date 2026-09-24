@@ -25,13 +25,57 @@
  * stale one is invisible: everything looks healthy and nothing works. The
  * Diagnostics panel compares the two and says so.
  */
-const VERSION = '2026-09-13.1'
+const VERSION = '2026-09-24.1'
 
 const WEBTORRENT_PREFIX = 'webtorrent/'
 const PORT_TIMEOUT_MS = 5000
 /** How long to wait for a tab to answer with the file before giving up. */
 const PAGE_TIMEOUT_MS = 20000
 const POLICY_TIMEOUT_MS = 1000
+
+/* -------------------------------------------------------------------------- */
+/* Which origin this worker is serving                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The gate registers this file as `sw.js`. With content isolation on, each
+ * site's own origin (`<infohash>.<content domain>`) registers it too, from
+ * relay.html, as `sw.js?gate=<gate origin>` — see
+ * spec/second-origin-isolation.md. Three things differ there:
+ *
+ *  - It serves one torrent: the infohash in its own hostname, and no other.
+ *  - A site's ancestors are relay.html *and* the gate, so `frame-ancestors`
+ *    has to name both.
+ *  - Its questions — for a file, for the scripts policy — go to relay.html
+ *    alone. The site is a window of this origin too, and one with scripts on
+ *    could otherwise answer ahead of the relay (about nothing but itself, but
+ *    there is no reason to let it).
+ *
+ * A site with scripts on can re-register this worker with a different `gate`.
+ * That changes its own origin and nothing else, which is the boundary.
+ */
+const GATE = new URL(self.location.href).searchParams.get('gate')
+const CONTENT_MODE = GATE !== null
+const OWN_INFOHASH = CONTENT_MODE ? ownInfoHash() : null
+
+function ownInfoHash () {
+  const label = self.location.hostname.split('.')[0]
+  let gateIsAnOrigin = false
+  try { gateIsAnOrigin = new URL(GATE).origin === GATE } catch {}
+  // Anything malformed serves nothing, rather than guessing what was meant.
+  return gateIsAnOrigin && /^[0-9a-f]{40}$/.test(label) ? label : null
+}
+
+/**
+ * The windows this worker may ask. On the gate, exactly the ones it always
+ * asked; on a content origin, relay.html and nothing else.
+ */
+async function answeringWindows ({ includeUncontrolled }) {
+  if (!CONTENT_MODE) return self.clients.matchAll({ type: 'window', includeUncontrolled })
+  const relay = new URL('relay.html', self.registration.scope).pathname
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  return windows.filter(client => new URL(client.url).pathname === relay)
+}
 
 /** Set once WebTorrent confirms the browser can cancel worker ReadableStreams. */
 let streamCancelSupported = false
@@ -145,7 +189,7 @@ async function askingTorrent (event) {
  */
 async function policyFor (infoHash) {
   const denied = { scripts: false }
-  const windows = await self.clients.matchAll({ type: 'window' })
+  const windows = await answeringWindows({ includeUncontrolled: false })
   if (windows.length === 0) return denied
 
   return new Promise(resolve => {
@@ -184,7 +228,9 @@ function contentSecurityPolicy (origin, allowScripts) {
     // No form can post the reader anywhere, including back into the torrent.
     "form-action 'none'",
     // Only the gate may frame a site; a site may not be framed by the outside.
-    `frame-ancestors ${origin}`,
+    // On a content origin the site sits inside relay.html, inside the gate,
+    // and every ancestor is checked, so both are named.
+    CONTENT_MODE ? `frame-ancestors 'self' ${GATE}` : `frame-ancestors ${origin}`,
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",
     "font-src 'self' data:",
@@ -220,6 +266,13 @@ async function serve (event, torrentPath) {
   const request = event.request
   const infoHash = torrentPath.split('/')[0]
   const gateOrigin = new URL(self.registration.scope).origin
+
+  if (CONTENT_MODE && (OWN_INFOHASH === null || infoHash !== OWN_INFOHASH)) {
+    return new Response('This address serves one site only.', {
+      status: 403,
+      headers: { 'Content-Type': 'text/plain', 'Content-Security-Policy': "default-src 'none'" }
+    })
+  }
 
   const asking = await askingTorrent(event)
   if (asking && asking !== infoHash) {
@@ -267,7 +320,7 @@ async function serve (event, torrentPath) {
  * client and streams the bytes back over the returned port.
  */
 async function requestFromPage (request) {
-  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  const windows = await answeringWindows({ includeUncontrolled: true })
   if (windows.length === 0) return null
 
   return new Promise(resolve => {
