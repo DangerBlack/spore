@@ -291,6 +291,13 @@ async function run () {
   await wait(500)
   check('turning scripts on asks first',
     prompts.some(text => text.includes("Run this site's scripts?")), prompts[0]?.split('\n')[0])
+  // Sites share the gate's origin here, so the question must say that the risk
+  // reaches every site and a kept key — not that it stays with this one.
+  const warning = prompts.find(text => text.includes("Run this site's scripts?")) ?? ''
+  check('and says the risk reaches every site, not just this one',
+    /every site/.test(warning) && /publishing key/.test(warning) &&
+      !/does not apply to any other site/.test(warning),
+    warning.split('\n')[2])
 
   // Opting in reloads the frame, so poll rather than guess how long that takes.
   const after = await settle(page, () => document.getElementById('probe')?.textContent,

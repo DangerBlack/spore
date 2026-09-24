@@ -1522,14 +1522,27 @@ async function warnViewerStuck () {
   }
 }
 
+/**
+ * What the reader is agreeing to. It has to be true of this gate, not of a
+ * better one: sites share Spore's own origin here, so a script on one of them
+ * can do everything Spore can do in this browser, to every site, not just to
+ * itself. An earlier version said "this does not apply to any other site",
+ * and that was the opposite of the truth.
+ */
 const SCRIPTS_WARNING = `Run this site's scripts?
 
-Spore has to serve sites from its own origin — a service worker cannot reach a
-sandboxed frame — so a site with scripts enabled can also tamper with Spore's
-own address bar and controls. It still cannot reach the network outside its
-torrent, and this does not apply to any other site.
+This gate shows every site from its own address, so this site's scripts get the
+same access to this browser that Spore itself has. A hostile site could:
 
-Only enable this for a site you trust.`
+- read and change what Spore keeps here for every site: sites kept offline,
+  which authors you trust, which other sites may run scripts
+- use a publishing key kept on this device to sign in your name
+- stop Spore from showing sites in your other tabs while this one is open
+- change what Spore's own address bar and controls show you
+
+It still cannot send anything outside its own torrent over the network.
+
+Only enable this for a site you would trust as much as Spore itself.`
 
 /**
  * Flipping the switch reloads the site: the policy travels on response headers,
