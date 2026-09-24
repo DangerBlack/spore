@@ -81,12 +81,20 @@ containers entirely and drop the bundle on any static host, which is what
 Off by default, and a plain static mirror cannot turn it on. With it off, a site
 whose scripts a reader enables shares the gate's origin, and so can reach what
 Spore stores for every other site — the gate says so before it asks. With it on,
-each site is shown at `<infohash>.content.your-domain`, which the browser keeps
-apart from the gate and from every other site.
+each site is shown at `<infohash>.<content domain>`, which the browser keeps
+apart from the gate.
+
+The content domain must be **a different registrable domain** from the gate's
+(`spore-content.example` for a gate at `spore.example`, not
+`content.spore.example`): under the gate's own, a site could set cookies the
+gate receives, so the gate refuses that configuration. Putting the content
+domain on the [Public Suffix List](https://publicsuffix.org) as well — the way
+`github.io` is — stops sites sharing cookies with each other too, which is the
+last thing two hostile sites could use to recognise the same reader.
 
 It needs, all three:
 
-- **a wildcard DNS record**, `*.content.your-domain` pointing at this host;
+- **a wildcard DNS record**, `*.<content domain>` pointing at this host;
 - **a wildcard certificate** for it — only a DNS challenge (ACME DNS-01) can
   issue one, so the TLS proxy in front needs a plugin for your DNS provider;
 - **the content host serving the relay and nothing else.**

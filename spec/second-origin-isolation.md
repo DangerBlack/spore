@@ -241,13 +241,22 @@ being one.
 
 Before any of this was written into the gate, the platform behavior it relies
 on was checked with a standalone probe — two tiny pages and a trivial worker,
-no Spore code — in Chromium 151 and Firefox 142, gate at `spore.localhost`,
-content at `<40 hex>.content.spore.localhost`. That pair was chosen on purpose:
-in production `gate.example` and `<hash>.content.example` are *same-site but
-cross-origin*, and storage partitioning treats cross-site frames differently,
-so a test on two unrelated hostnames would have measured the wrong thing.
+no Spore code — in Chromium 151 and Firefox 142.
 
-Both engines agreed on everything that matters:
+It was run twice, and the second run corrected the first. The first placed the
+content domain *under* the gate's (`spore.localhost` and
+`<hash>.content.spore.localhost`): same-site, cross-origin, chosen on the
+reasoning that storage partitioning treats cross-site frames differently and
+might break the worker. An independent review of the branch pointed out what
+that reasoning missed — same-site is the *weaker* arrangement. The origin
+boundary holds, but a site on the gate's registrable domain can set cookies the
+gate receives, and Chromium isolates processes by site rather than origin. So
+the probe was repeated with the content domain on a different site
+(`<hash>.spore-content.localhost`), where every site frame is a third-party
+frame and partitioning applies. It works the same, and is now the arrangement
+this design requires and the suite tests.
+
+Both engines, both arrangements, agreed on everything that matters:
 
 - Both hostnames are secure contexts over plain `http`, because `*.localhost`
   is treated like `localhost`. Development and CI therefore need no
@@ -263,14 +272,16 @@ Both engines agreed on everything that matters:
 - The innermost document *can* reach `relay.html`'s DOM. Expected: they share
   an origin. This is the nested-iframe point above, confirmed.
 
-One difference, and it produces an invariant: **Firefox honours
-`document.domain = 'spore.localhost'` from the content origin; Chromium
-ignores it** (origin-keyed agent clusters). Access stays blocked in both,
-because relaxation only works when both sides opt in and the gate never does.
-So the gate must never assign `document.domain`, and nothing can enforce that
-from a static host — the header that would (`Origin-Agent-Cluster`) needs a
-server. It is a rule for the code, and the end-to-end suite should assert that
-a content frame which sets `document.domain` is still refused.
+One difference, same-site only, and it produces an invariant: **Firefox honours
+`document.domain = 'spore.localhost'` from a content origin under the gate's
+domain; Chromium ignores it** (origin-keyed agent clusters). Access stays
+blocked in both, because relaxation only works when both sides opt in and the
+gate never does. With the content domain on a different site, as required now,
+both engines refuse the assignment outright — there is no shared domain to
+relax to. The gate still must never assign `document.domain`, since nothing
+can enforce that from a static host (the header that would,
+`Origin-Agent-Cluster`, needs a server), and the suite asserts a content frame
+that tries it is still refused.
 
 Two more rules fell out of building the probe:
 
@@ -282,9 +293,12 @@ Two more rules fell out of building the probe:
   would not, which is fine only because Spore reads v1 magnets alone
   (`js/magnet.js`). If v2 support ever arrives, this scheme has to change with
   it.
-- **Tests must use a gate hostname that is the parent of the content
-  hostnames** (`spore.localhost` / `*.content.spore.localhost`), never two
-  sibling names, for the same-site reason above.
+- **The content domain must be a different registrable domain from the
+  gate's**, and ideally on the Public Suffix List, for the cookie and process
+  reasons above; tests use `spore.localhost` and `*.spore-content.localhost`.
+  The gate refuses a content domain under its own. Without the list, sites
+  still share one registrable domain with each other — cookies set there are
+  the residual channel, described in `SECURITY.md`.
 
 ### Sketch of the pieces
 
@@ -305,7 +319,7 @@ but costs nothing to have.
 Files, and what each one does:
 
 - `js/config.js` — `CONTENT_ISOLATION`, `null` by default, or
-  `{ gate: 'https://spore.example', content: 'content.spore.example' }` on a
+  `{ gate: 'https://spore.example', content: 'spore-content.example' }` on a
   mirror that runs the infrastructure. Both are needed: the gate uses
   `content` to build frame addresses, and the content side uses `gate` to know
   whom to answer to.
@@ -324,14 +338,14 @@ Files, and what each one does:
   config is set, and wait for the relay's report instead of reading a
   cross-origin document.
 - `index.html` — the gate's CSP `<meta>` must list the content domain in
-  `frame-src` (`https://*.content.spore.example`). The gate cannot write that
+  `frame-src` (`https://*.spore-content.example`). The gate cannot write that
   for an operator; the comment above the policy says so, and the config
   comment points at it.
 - `SCRIPTS_WARNING` — two texts, chosen by whether the config is set.
 - `tools/serve.mjs`, `tools/e2e.mjs` — a test hook that turns isolation on for
   one run (the same way `--trackers` already rewrites `DEFAULT_TRACKERS`), and
   a suite that opens sites through `spore.localhost` and
-  `<hash>.content.spore.localhost`.
+  `<hash>.spore-content.localhost`.
 
 **One requirement on the proxy, not on the code:** the content domain must
 serve the gate's own static files — `relay.html`, `js/`, `sw.js` — and nothing
@@ -414,7 +428,7 @@ Still genuinely open:
   answer before the trust chip can be redesigned around it, not after.
 - **Does it work on WebKit at all?** Every browser on iOS is WebKit, which
   already refuses to serve a sandboxed frame from a worker (see `viewer.js`).
-  Whether it registers and applies a worker inside a same-site, cross-origin
+  Whether it registers and applies a worker inside a third-party (cross-site)
   frame — the whole of this mode — is unmeasured. The standalone probe in
   "Measured, not assumed" is the test to run on an iPhone first.
 - **Should scripts stay refused where the sandbox is unavailable?** On an engine

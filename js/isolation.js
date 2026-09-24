@@ -21,7 +21,7 @@ import { scriptsAllowed } from './policy.js'
 
 const INFOHASH = /^[0-9a-f]{40}$/
 
-/** A host, optionally with a port: `content.spore.example[:8443]`. */
+/** A host, optionally with a port: `spore-content.example[:8443]`. */
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::\d{1,5})?$/
 
 /** Messages from a relay all carry a `spore` field with one of these. */
@@ -50,7 +50,19 @@ export const isolation = (() => {
     const origin = new URL(gate).origin
     if (origin !== gate) throw new Error(`gate must be an origin like https://spore.example, not ${gate}`)
     if (typeof content !== 'string' || !HOST.test(content)) {
-      throw new Error(`content must be a domain like content.spore.example, not ${content}`)
+      throw new Error(`content must be a domain like spore-content.example, not ${content}`)
+    }
+    // A content domain under the gate's own would put every site on the gate's
+    // *site*: able to set cookies the gate receives, and in Chromium possibly
+    // sharing its process. The origin boundary holds either way; the site
+    // boundary does not. Only the obvious case can be caught without the
+    // Public Suffix List, so the rest is on the documentation.
+    const gateHost = new URL(gate).hostname
+    const contentHost = content.replace(/:\d+$/, '')
+    if (contentHost === gateHost || contentHost.endsWith(`.${gateHost}`)) {
+      throw new Error(
+        `content (${content}) must be on a different domain from the gate (${gateHost}), ` +
+        'e.g. spore-content.example rather than content.' + gateHost)
     }
     return { gate, scheme: new URL(gate).protocol, content }
   } catch (err) {
@@ -116,6 +128,9 @@ export function relayURL (infoHash, path, { scripts, sandbox }) {
 export function answerRelays ({ server, scope, frame, onShown }) {
   if (!isolation) return
 
+  // Not rate-limited. A site with scripts on can send as many requests as it
+  // likes, each for its own torrent: it costs the gate tab work, and reaches no
+  // other site's data. A scripted page could burn its own tab anyway.
   window.addEventListener('message', event => {
     const kind = event.data?.spore
     if (kind !== RELAY.request && kind !== RELAY.policy && kind !== RELAY.shown) return
@@ -167,6 +182,14 @@ function relayRequest (server, scope, infoHash, request, port) {
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return refuse(405, 'Only GET and HEAD.')
+  }
+  // WebTorrent decodes the path inside an async handler, where a malformed
+  // escape throws, is never answered, and turns into a 504 twenty seconds
+  // later. Refused here instead, at once.
+  try {
+    decodeURIComponent(url.pathname)
+  } catch {
+    return refuse(400, 'Malformed path.')
   }
 
   const range = request.headers?.range

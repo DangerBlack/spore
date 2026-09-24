@@ -6,17 +6,23 @@
 # scripts a reader enables can no longer reach what Spore stores for every other
 # site.
 #
-# Replace spore.example with your gate's host and content.spore.example with
+# Replace spore.example with your gate's host and spore-content.example with
 # the domain sites will live under. Then, in the bundle you serve:
 #
 #   js/config.js   export const CONTENT_ISOLATION = {
 #                    gate: 'https://spore.example',
-#                    content: 'content.spore.example'
+#                    content: 'spore-content.example'
 #                  }
-#   index.html     frame-src 'self' https://*.content.spore.example;
+#   index.html     frame-src 'self' https://*.spore-content.example;
 #
-# DNS:  *.content.spore.example  →  this host
-# TLS:  a certificate for *.content.spore.example. A wildcard can only be
+# The content domain must be a different registrable domain from the gate's,
+# not a subdomain of it: under the gate's own, a site could set cookies the gate
+# receives. The gate refuses that configuration. Listing the content domain on
+# the Public Suffix List (https://publicsuffix.org), as github.io is, goes one
+# step further and stops sites sharing cookies with each other.
+#
+# DNS:  *.spore-content.example  →  this host
+# TLS:  a certificate for *.spore-content.example. A wildcard can only be
 #       issued through a DNS challenge (ACME DNS-01), so the proxy in front of
 #       this — Caddy, Traefik, certbot — needs a plugin for your DNS provider.
 #
@@ -27,7 +33,7 @@ server {
     listen 80;
     # Exactly forty hex characters, then the content domain: an infohash, and
     # nothing that could be mistaken for one.
-    server_name "~^[0-9a-f]{40}\.content\.spore\.example$";
+    server_name "~^[0-9a-f]{40}\.spore-content\.example$";
     root /usr/share/nginx/html;
 
     # The rule that matters, and the reason this block ends in a 404:

@@ -32,7 +32,7 @@ import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
 import { SiteNotFound, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
-import { answerRelays, isolation, isolationProblem, relayURL } from './isolation.js'
+import { answerRelays, contentOrigin, isolation, isolationProblem, relayURL } from './isolation.js'
 import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
@@ -224,16 +224,25 @@ async function boot () {
   watchTheWorker()
 
   try {
-    // A mirror that asked for isolation and got its configuration wrong would
-    // otherwise frame every site at an address that does not exist.
-    if (isolationProblem) throw isolationProblem
     const registration = await startWorker()
+    // A mirror that asked for isolation and got its configuration wrong would
+    // otherwise frame every site at an address that does not exist. Checked
+    // after the first await, not before: until then this module is still being
+    // evaluated, and fail() reaches classes declared further down it, which
+    // throws and leaves the gate on "Starting…" saying nothing at all.
+    if (isolationProblem) throw isolationProblem
     startClient(registration)
     answerRelays({
       server: getServer(),
       scope: registration.scope,
       frame: () => ui.viewer.frame.contentWindow,
-      onShown: (infoHash, report) => ui.viewer.relayReported(report.relay, report.arrived, report.reason)
+      // The report names its relay's URL; its origin must also be the one that
+      // sent it, so no frame can settle the report for another.
+      onShown: (infoHash, report) => {
+        let from = null
+        try { from = new URL(report.relay).origin } catch {}
+        if (from === contentOrigin(infoHash)) ui.viewer.relayReported(report.relay, report.arrived, report.reason)
+      }
     })
   } catch (err) {
     return fail(err)
@@ -1558,9 +1567,9 @@ async function warnViewerStuck () {
 const ISOLATED_SCRIPTS_WARNING = `Run this site's scripts?
 
 This gate shows each site from an address of its own, which the browser keeps
-apart from Spore and from every other site. Its scripts cannot read or change
-what Spore keeps for other sites, cannot use a publishing key kept on this
-device, and cannot reach the network outside its own torrent.
+apart from Spore. Its scripts cannot read or change what Spore keeps for other
+sites, cannot use a publishing key kept on this device, and cannot reach the
+network outside its own torrent.
 
 They can still change anything this site shows you — including drawing
 something that looks like Spore's own controls — so only enable this for a site

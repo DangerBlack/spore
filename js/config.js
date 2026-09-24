@@ -40,9 +40,17 @@ export const TORRENT_PATH = 'webtorrent'
  * cannot reach what Spore stores for other sites. See
  * spec/second-origin-isolation.md.
  *
+ * The content domain must be a different registrable domain from the gate's —
+ * `spore-content.example`, not `content.spore.example`. Under the gate's own,
+ * a site could set cookies the gate receives, and Chromium may run it in the
+ * gate's process; the gate refuses that configuration outright. Better still,
+ * put the content domain on the Public Suffix List, as github.io is: otherwise
+ * all sites share one registrable domain between themselves, and two of them
+ * with scripts on can use cookies to recognise the same reader.
+ *
  * @type {null | { gate: string, content: string }}
  *   `gate` is this gate's own origin, e.g. `https://spore.example`;
- *   `content` the domain sites live under, e.g. `content.spore.example`.
+ *   `content` the domain sites live under, e.g. `spore-content.example`.
  */
 export const CONTENT_ISOLATION = null
 
