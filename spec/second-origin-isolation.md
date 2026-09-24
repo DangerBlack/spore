@@ -78,28 +78,157 @@ each `.onion` or each Netlify preview deploy does. No code has to remember
 which torrent a request belongs to; the browser already knows, because it is
 part of the hostname.
 
+**Behind one flag, off by default.** Whatever gets built here has to cost
+nothing for a mirror that cannot run it. The plan is one configuration value —
+`CONTENT_ORIGIN_TEMPLATE` in `js/config.js`, `null` unless a mirror operator
+sets and rebuilds with their own — read the same way `DEFAULT_TRACKERS` already
+is: a constant a mirror operator edits and recompiles with, not something
+fetched or negotiated at runtime. `null` (the default, and what any plain
+`username.github.io` mirror ships) means the gate behaves exactly as it does
+today — same origin, same known hole, same honestly-worded warning. Only a
+mirror that has set the value attempts anything in this document at all.
+
+That default has one more consequence worth stating plainly: because most
+mirrors will never set it, `SCRIPTS_WARNING` in `js/app.js` has to keep telling
+the truth about the *common* case, not the aspirational one. The dialog text
+must read the current value of `CONTENT_ORIGIN_TEMPLATE` and say one of two
+different things — the honest "this shares Spore's own storage and can disrupt
+every other open tab" when it is `null`, or "this site is isolated on its own
+address" when a mirror has enabled it. Shipping one warning that is only true
+on the rare mirror, while implying it everywhere, would be worse than the
+warning that exists today.
+
 What still has to be solved, and is not solved by picking this shape:
 
-1. **Delivery.** The WebTorrent client — the actual WebRTC connections — has to
-   live in a page, and today that page is the gate's. A request landing on
-   `<hash>.content.example` needs some way to reach bytes that live in a swarm
-   the *gate's* tab joined. The plausible shape is a second service worker,
-   registered on the content origin, that does not speak WebRTC itself but
-   bridges each request back to the gate's page over `postMessage` or a
-   `BroadcastChannel` — essentially `sw.js`'s current `requestFromPage`, moved
-   across an origin boundary instead of within one. This is a protocol of its
-   own, not a hosting change.
+1. **Delivery — the hard part, worked through below**, because the first pass
+   at this document underestimated it: it is not a hosting change, it is a
+   second, parallel way to turn torrent bytes into an HTTP response.
 2. **Discovery.** The gate's own page has to learn, or be told, the address of
    its paired content origin. A fixed relationship (`gate.example` implies
    `*.content.example`) is the simplest answer and couples the two at deploy
    time, which is at least honest about the fact that they are one system with
-   two hostnames.
+   two hostnames. This is what `CONTENT_ORIGIN_TEMPLATE` above already answers.
 3. **The trust chip.** `js/app.js`'s "verified" indicator, and the address bar
    itself, live in the gate's chrome. If content renders on a different
    origin, the reader is looking at two hostnames for one site — the one they
    asked for and the one it actually rendered on — and the UI has to make that
    legible rather than confusing. This did not need solving before, because
-   there was only ever one hostname to show.
+   there was only ever one hostname to show. **Deliberately deferred**: get
+   delivery right first, on a second pass redesign the chip around it.
+
+## Delivery, worked through
+
+The first pass of this document said the content origin needs "a second
+service worker... that bridges each request back to the gate's page over
+`postMessage`," as if that were the whole of it. It is not, and the gap
+matters enough to spell out before anyone starts writing this.
+
+### Why a plain relay does not work
+
+`js/swarm.js` does not implement the page-side half of serving a torrent as
+HTTP. It calls `client.createServer({ controller: registration })` and the
+vendored WebTorrent bundle does the rest: it listens for genuine
+`navigator.serviceWorker` message events — from *its own* registered worker,
+on *its own* origin — and answers them using the torrent's pieces directly.
+That listener cannot be redirected to answer messages relayed from a foreign
+iframe, because the browser will not let a page fabricate a message whose
+`event.source` looks like a real `ServiceWorker`. Nothing in the platform lets
+one page pretend to be another origin's service worker, and nothing here
+should try to defeat that.
+
+So a request that lands on `<hash>.content.example`'s worker cannot simply be
+forwarded, verbatim, into the gate's existing pipeline and expect an answer.
+There is no listener on the gate's side shaped to receive it.
+
+### What has to be built instead
+
+A **second, minimal implementation** of "turn a path in this torrent into an
+HTTP-shaped response," living in the gate's own page and callable directly —
+not through `createServer()`, on top of WebTorrent's public per-file API
+instead: `torrent.files.find(...)` to locate the entry, `file.createReadStream
+({ start, end })` to read it (confirmed present as a public method on the
+vendored bundle's `File` objects), by hand:
+
+- parse a `Range: bytes=start-end` header the same way a real static file
+  server would, and answer `206 Partial Content` with `Content-Range` when one
+  was sent, `200` with the whole file otherwise
+- a small extension-to-MIME-type table, since nothing here can rely on a real
+  HTTP server's content-type sniffing
+- `Content-Length` from `file.length` (or the requested range's length)
+- stream the bytes across the relay channel in chunks, the same shape `sw.js`'s
+  own `streamFromPort` already uses for its (same-origin) case, so the content
+  origin's local service worker can turn them into a `ReadableStream` response
+  exactly as `sw.js` does today
+
+This is real, new, security-relevant code — not configuration, not plumbing.
+**It is also the single largest risk in this whole document**, for a reason
+this codebase's own commit history keeps proving out loud: two
+implementations that are each individually correct but must behave
+*identically* — here, "serve this file as HTTP" implemented once inside the
+vendored bundle for the same-origin case and once by hand for the relayed
+case — are exactly how this project has shipped its worst bugs before (a
+manifest and a torrent disagreeing about a path, a seeder and a reader
+disagreeing about what a signature covers). A byte range handled slightly
+differently, a MIME type guessed differently, a streaming edge case
+(zero-length file, a range past the end, a mid-stream torrent-piece failure)
+handled differently between the two paths would not fail loudly — it would
+render wrong, or hang, only for whoever's mirror has this flag on, and be
+brutal to reproduce. Whatever gets built here needs the same treatment
+`site.js`'s entry-finding logic got: one shared module the tests can call
+directly with every input shape both paths might see, rather than two
+call sites that happen to agree today.
+
+### The nested-iframe question, resolved
+
+Earlier drafts of this discussion treated a second, nested iframe — a small
+Spore-authored `relay.html` sitting between the gate and the site's own
+document — as a security boundary protecting the relay from a hostile site's
+script. **It is not one, and should not be sold as one.** The gate
+authenticates every relayed request by `event.origin`, which a page script
+cannot forge; a message arriving from `https://<hash>.content.example` can
+only ever be answered with that same torrent's own bytes, whether it came from
+a well-behaved relay or from the hostile site forging the message itself. A
+script that skipped the relay and messaged `window.parent` directly would gain
+nothing it cannot already reach — its own torrent's files.
+
+The actual reason to keep a separate `relay.html` (plus a small `js/relay.js`)
+rather than running the bridge in the same document as the site is **to avoid
+ever rewriting the hosted page's HTML** — injecting a bootstrap script into
+someone's `index.html` response is exactly the kind of thing `site.js`'s own
+header explicitly rules out project-wide ("the gate does not rewrite HTML...
+there is nothing to miss"), and it would be fragile besides (malformed HTML,
+an early competing `<meta charset>`, a page that clobbers globals). Nesting
+buys architectural cleanliness, not an additional trust boundary — document it
+that way in the code, not as a security control, so nobody later relies on it
+being one.
+
+### Sketch of the pieces
+
+    gate.example                                 (has the WebTorrent client)
+     └─ iframe: <hash>.content.example/relay.html      (new, Spore-authored)
+         registers <hash>.content.example's own copy of sw.js,
+         bridges its messages to window.parent via postMessage
+         └─ iframe: <hash>.content.example/webtorrent/<hash>/index.html
+             the site itself, sandboxed exactly as it is today
+
+Files this implies, none written yet:
+
+- `js/config.js` — `CONTENT_ORIGIN_TEMPLATE` (default `null`).
+- `relay.html`, `js/relay.js` — the bootstrap/bridge, new.
+- a shared module for "serve this path from this torrent as an HTTP response,"
+  written once and called from both the relay path and — ideally — refactored
+  into what `sw.js` already does for the same-origin path, so there is
+  provably one implementation rather than two that are meant to agree.
+- `js/app.js` — branches the iframe's `src` on `CONTENT_ORIGIN_TEMPLATE`; a new
+  gate-side listener answering relayed requests via the shared serve module;
+  `SCRIPTS_WARNING` reads the config value and says one of two true things.
+- `index.html` — a comment noting that enabling the flag requires adding
+  `https://*.<content-domain>` to `frame-src` and `connect-src` in the CSP
+  `<meta>` tag by hand; the gate cannot do this for an operator, since the
+  domain is theirs.
+- `sw.js` — unchanged. The same file is deployed a second time, at the content
+  origin; its own behavior does not need to know which origin it is running
+  on.
 
 ## What it costs to run
 
@@ -139,28 +268,39 @@ about the default case.
 
 ## Open questions
 
+Resolved since the first draft: the delivery mechanism now has a concrete
+shape (above), the nested iframe's purpose is corrected (cleanliness, not a
+trust boundary — `event.origin` provides that), and the config default/warning
+behavior is settled (`CONTENT_ORIGIN_TEMPLATE = null`, `SCRIPTS_WARNING` reads
+it). What is still genuinely open:
+
+- **Can the relayed-serving path and `sw.js`'s existing same-origin path share
+  one implementation, or only agree by discipline?** The "single largest risk"
+  section above assumes a shared module is possible. It may not be: `sw.js`'s
+  path gets its response shape from WebTorrent's own `createServer` internals,
+  which are opaque vendored code, while the relay path would be hand-written
+  against the public `File` API. If the two genuinely cannot share code, the
+  fallback is a test suite that feeds *identical* request shapes (fresh file,
+  mid-file range, past-the-end range, zero-length file, a range spanning a
+  piece boundary) to both paths and asserts byte-identical responses — written
+  before the relay path ships, not after a mismatch is reported.
 - **Is per-infohash granularity actually right, or is per-*torrent-series*
   (per `spore.pub` key) enough?** Two versions of the same site sharing an
   origin might be desirable (a reader mid-update reasonably expects continuity)
   or might not (a compromised key's old and new versions should probably not
   trust each other either). Not yet argued through.
-- **Does every mirror have to support this, or can a mirror decline?** If
-  support is optional, the gate needs to detect its absence and fall back to
-  something — presumably today's shared-origin behavior, with today's warning
-  — rather than failing silently. That fallback is itself a piece of the
-  design, not an afterthought.
+- **What does a relayed request time out to?** `sw.js`'s own `PAGE_TIMEOUT_MS`
+  turns a wedged same-origin request into a readable error after 20 seconds.
+  The relay adds a hop (content-origin SW → `relay.html` → `postMessage` →
+  gate page → back), each of which can fail independently — the timeout
+  budget and the error surfaced to the reader need their own design, not an
+  assumption that the existing constant still means the same thing once it is
+  spent partly on a cross-origin round trip.
 - **Who issues the wildcard certificate, and how does a self-hosted mirror
   get one without a manual step per infohash?** ACME's DNS-01 challenge covers
   a wildcard in one certificate, which answers this for a mirror willing to
   automate DNS updates — worth confirming that is an acceptable operational
   bar rather than assuming it.
-- **What does the content-origin service worker's bridge protocol actually
-  look like**, and does it reproduce `sw.js`'s existing `requestFromPage`
-  message shape, or does crossing an origin boundary change what is safe to
-  ask the gate's page for? `postMessage` between origins needs an explicit
-  target origin and a sender check on both ends — the trust properties
-  `askingTorrent()` gets from `event.clientId` today do not obviously carry
-  over unchanged.
 - **How does the reader's address bar represent a site that rendered on a
   different hostname than the one they typed a magnet into?** This needs an
   answer before the trust chip can be redesigned around it, not after.
