@@ -256,6 +256,12 @@ async function run () {
   check('a relative image loads', rendered.imageLoaded === true)
   check('scripts do not run by default', rendered.probe === 'Scripts are off.', rendered.probe)
 
+  const rows = await diagnosticsRows(page)
+  check('Diagnostics says content isolation is off on a gate that has not set it up',
+    /^off — /.test(rows['Content isolation'] ?? ''), rows['Content isolation'])
+  check('and still checks what the worker returns for the viewer',
+    /^200 text\/html/.test(rows['Viewer response'] ?? ''), rows['Viewer response'])
+
   // --- the policy on the wire ----------------------------------------------
   const headers = await fetchHeaders(page, infoHash, entry)
   const csp = headers['content-security-policy'] ?? ''
@@ -3682,6 +3688,14 @@ async function runIsolated () {
     check('isolation: the gate does not call a site that arrived stuck',
       await page.$eval('#notice', n => n.hidden || !n.textContent.includes('stayed blank')))
 
+    // A cross-origin frame cannot be fetched from the gate, so Diagnostics must
+    // not report that as a failure; it reports what the relay said instead.
+    const rows = await diagnosticsRows(page)
+    check('isolation: Diagnostics says isolation is on', /^on — /.test(rows['Content isolation'] ?? ''),
+      rows['Content isolation'])
+    check('isolation: and reports the relay\'s word on the viewer, not a failed fetch',
+      /relay reports the page arrived/.test(rows['Viewer response'] ?? ''), rows['Viewer response'])
+
     // The policy the site's own worker sends. Read from the relay, which shares
     // the site's origin and is allowed to fetch.
     const relay = page.frames().find(f => f.url().includes('/relay.html'))
@@ -3809,6 +3823,17 @@ async function runIsolated () {
     await page.close()
     isoServer.kill()
   }
+}
+
+/** Open Diagnostics, wait for it to finish, and return its rows by label. */
+async function diagnosticsRows (page) {
+  await page.evaluate(() => document.getElementById('diagnose').click())
+  await page.waitForFunction(() => [...document.querySelectorAll('#diagnostics-body dt')]
+    .some(dt => dt.textContent === 'Offline storage'), { timeout: 20_000 })
+  const rows = await page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll('#diagnostics-body dt')].map(dt => [dt.textContent, dt.nextElementSibling?.textContent])))
+  await page.evaluate(() => document.getElementById('diagnostics').close())
+  return rows
 }
 
 /**

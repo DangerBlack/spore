@@ -29,7 +29,15 @@ const ACTIVATE_TIMEOUT_MS = 10_000
 /** A worker streaming a long file must not be stopped for looking idle. */
 const KEEPALIVE_MS = 20_000
 
-start().catch(err => say(`This site could not be shown: ${err.message}`))
+start().catch(err => {
+  say(`This site could not be shown: ${err.message}`)
+  // Said to the gate as well, at once and with the reason: otherwise it waits
+  // out its whole timeout and then can only report a blank frame.
+  if (isolation && window.parent !== window) {
+    parent.postMessage({ spore: RELAY.shown, relay: location.href, arrived: false, reason: err.message },
+      isolation.gate)
+  }
+})
 
 async function start () {
   if (isolationProblem) throw isolationProblem

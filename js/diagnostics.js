@@ -97,11 +97,30 @@ export async function collectDiagnostics () {
 
   await reportGateVersion(add)
 
+  const { isolation, isolationProblem } = await import('./isolation.js')
+  add('Content isolation', isolationProblem
+    ? isolationProblem.message
+    : isolation
+      ? `on — each site at <infohash>.${isolation.content}`
+      : 'off — sites share this gate\'s origin', isolationProblem ? false : null)
+
   // What the viewer is pointed at, and what the worker actually returns for it.
   // "Nothing displays" is usually one of these two lines disagreeing with the
   // other: a frame with no source, or a source the worker will not serve.
   const frame = document.getElementById('viewer')
-  if (frame && !frame.hidden && frame.src && frame.src !== 'about:blank') {
+  if (frame && !frame.hidden && frame.src && frame.src !== 'about:blank' && isolation) {
+    // On the site's own origin, which this page may not fetch from — that is
+    // the point. Its relay reports whether the site arrived instead.
+    add('Viewer', frame.src, null)
+    const { relayReport } = await import('./viewer.js')
+    const report = relayReport()
+    add('Viewer response', report === null
+      ? 'on the site\'s own origin; its relay has not reported yet'
+      : report.arrived
+        ? 'on the site\'s own origin; its relay reports the page arrived'
+        : `on the site's own origin; its relay reports it did not arrive: ${report.reason ?? 'no reason given'}`,
+    report === null ? null : report.arrived)
+  } else if (frame && !frame.hidden && frame.src && frame.src !== 'about:blank') {
     add('Viewer', frame.src.replace(location.origin, ''), null)
     try {
       const res = await fetch(frame.src)
