@@ -25,7 +25,7 @@
  * stale one is invisible: everything looks healthy and nothing works. The
  * Diagnostics panel compares the two and says so.
  */
-const VERSION = '2026-09-25.2'
+const VERSION = '2026-09-25.3'
 
 const WEBTORRENT_PREFIX = 'webtorrent/'
 const PORT_TIMEOUT_MS = 5000
@@ -67,6 +67,11 @@ const POLICY_TIMEOUT_MS = 1000
  * whose own hostname begins with an infohash would defeat that, so the gate
  * refuses to start on one (js/app.js); nothing here can know the configured
  * content domain, since a classic worker cannot import config.js.
+ *
+ * HOST_INFOHASH below and `isSiteHostname` in js/isolation.js are one rule —
+ * the first label is a 40-character infohash — written twice only because a
+ * classic worker cannot import a module. Keep the two expressions identical;
+ * tools/e2e.mjs checks that they are.
  */
 const GATE = new URL(self.location.href).searchParams.get('gate')
 const HOST_INFOHASH = /^[0-9a-f]{40}$/.test(self.location.hostname.split('.')[0])
