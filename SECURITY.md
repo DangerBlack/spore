@@ -247,6 +247,9 @@ many requests for its own files as it likes; that costs the gate tab work and
 reaches no one else's data, and a scripted page could burn its own tab anyway.
 Egress, CSP and the sandbox are as before.
 
+Beyond the suite, it has run on a real deployment behind Traefik with Let's
+Encrypt certificates, opened from Firefox for Android and Firefox desktop.
+
 Not yet verified: **WebKit.** Chromium 151 and Firefox 142 were measured;
 whether WebKit registers and applies a service worker inside a third-party
 cross-origin frame has not been, because no WebKit was available. Until it is,

@@ -3,7 +3,12 @@
 **Status: implemented behind `CONTENT_ISOLATION` in `js/config.js`, off by
 default.** Delivery, the relay, the content-mode worker, Diagnostics and the
 deploy example are built and covered by `tools/e2e.mjs` in Chromium; Firefox was
-checked by hand. Not done: the trust chip and address bar for a site on a
+checked by hand. It has also run on a real deployment — the gate image behind
+Traefik v3 with Let's Encrypt certificates, one per exact name (TLS-ALPN cannot
+issue a wildcard, so only hashes given a certificate were reachable) — opened
+from Firefox for Android and Firefox desktop. That deployment put gate and
+content domains under one registrable domain, the weaker arrangement described
+below, which is acceptable for a test and not for real use. Not done: the trust chip and address bar for a site on a
 second hostname (deliberately deferred, below), and any measurement on WebKit.
 The document keeps its earlier, wrong plans visible where the design changed,
 in the manner of [mutable-sites.md](mutable-sites.md), because why a thing is
