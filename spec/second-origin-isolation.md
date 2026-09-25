@@ -204,11 +204,18 @@ origin. It cannot be, for three reasons found while designing this:
   reads it from its own hostname and refuses any other, instead of relying on
   the gate to notice.
 
-The worker learns which mode it is in from its own script URL: the gate
-registers `sw.js`, `relay.html` registers `sw.js?gate=<gate origin>`. A site
-with scripts on could re-register it with a different value — on its own
-origin, affecting only itself, which is the boundary this whole design is
-about.
+The worker learns which mode it is in from two things: its script URL —
+the gate registers `sw.js`, `relay.html` registers `sw.js?gate=<gate origin>`
+— **and its own hostname**, which must begin with an infohash. The first
+version used the query alone, and a Copilot review of the pull request showed
+why that was not enough: in the default shared-origin mode a scripted site runs
+on the gate's origin, could register `sw.js?gate=…` at the gate's own scope,
+and would have turned the gate's worker into a content worker with no infohash
+to serve — refusing every request from every tab, unnoticed by the watchdog,
+which checks that a registration exists and not which. A page can choose a
+query; it cannot choose a hostname. On a content origin, a site re-registering
+the worker with a different `gate` still affects only itself, which is the
+boundary this whole design is about.
 
 ### How the viewer knows the site arrived
 
