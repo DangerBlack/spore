@@ -40,11 +40,17 @@ const PORT = Number(args.find(a => /^\d+$/.test(a)) ?? 8080)
 // content isolation on for this run only, by rewriting CONTENT_ISOLATION in
 // js/config.js and adding the content domain to index.html's frame-src. Every
 // hostname reaches this one server, so `spore.localhost` and
-// `<hash>.content.spore.localhost` need nothing but a browser that treats
+// `<hash>.spore-content.localhost` need nothing but a browser that treats
 // `*.localhost` as loopback and as a secure context, which current ones do.
+// (The content domain must not be under the gate's: the gate refuses that.)
+//
+// `--isolation-without-frame-src` leaves index.html alone, which is the
+// mistake an operator makes by editing only config.js; the suite checks the
+// gate names it.
 const ISOLATION = args.includes('--isolation')
   ? (([gate, content]) => ({ gate, content }))(args[args.indexOf('--isolation') + 1].split(','))
   : null
+const REWRITE_FRAME_SRC = !args.includes('--isolation-without-frame-src')
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -92,7 +98,7 @@ const handler = async (req, res) => {
     return res.end(body)
   }
 
-  if (ISOLATION && target === join(ROOT, 'index.html')) {
+  if (ISOLATION && REWRITE_FRAME_SRC && target === join(ROOT, 'index.html')) {
     const scheme = new URL(ISOLATION.gate).protocol
     const body = replaceOnce(readFileSync(target, 'utf8'),
       "frame-src 'self';", `frame-src 'self' ${scheme}//*.${ISOLATION.content};`)

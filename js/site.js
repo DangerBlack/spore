@@ -32,6 +32,7 @@
 import { TORRENT_PATH } from './config.js'
 import { MAX_KEY_BYTES, parseSporePub } from './identity.js'
 import { MAX_MANIFEST_BYTES, isJunkPath } from './manifest.js'
+import { encodePath } from './isolation.js'
 
 /** `index.html` directly inside the torrent's single root folder, or alone. */
 const ENTRY = /^(?:[^/]+\/)?index\.html?$/i
@@ -168,8 +169,7 @@ export function dropJunk (files) {
 
 /** URL the viewer iframe points at, served by the worker from the swarm. */
 export function entryURL (infoHash, entryPath) {
-  const encoded = entryPath.split('/').map(encodeURIComponent).join('/')
-  return new URL(`./${TORRENT_PATH}/${infoHash}/${encoded}`, document.baseURI).href
+  return new URL(`./${TORRENT_PATH}/${infoHash}/${encodePath(entryPath)}`, document.baseURI).href
 }
 
 /** Torrents made on Windows can carry backslashes; the worker matches on `/`. */

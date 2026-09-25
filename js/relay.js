@@ -21,7 +21,8 @@
  */
 
 import { TORRENT_PATH } from './config.js'
-import { RELAY, contentOrigin, isolation, isolationProblem } from './isolation.js'
+import { RELAY, contentOrigin, encodePath, isolation, isolationProblem } from './isolation.js'
+import { pageArrived } from './viewer.js'
 
 /** Same budget the gate's own viewer gives a page before calling it stuck. */
 const LOAD_TIMEOUT_MS = 15_000
@@ -55,10 +56,14 @@ async function start () {
   navigator.serviceWorker.addEventListener('message', forward)
   navigator.serviceWorker.startMessages()
 
-  const registration = await navigator.serviceWorker.register(
-    `./sw.js?gate=${encodeURIComponent(isolation.gate)}`,
-    { scope: './', updateViaCache: 'none' })
-  await activated(registration)
+  const script = new URL(`./sw.js?gate=${encodeURIComponent(isolation.gate)}`, location.href).href
+  const registration = await navigator.serviceWorker.register(script, { scope: './', updateViaCache: 'none' })
+  // register() hands back an existing registration untouched when its script
+  // URL already matches, so a newer sw.js on the host would never be fetched.
+  // Asked for explicitly; a failed check leaves the current worker, which is
+  // then still required to be ours below.
+  await registration.update().catch(() => {})
+  await activated(registration, script)
   await removeOthers(registration)
   setInterval(() => fetch(`./${TORRENT_PATH}/keepalive/`).catch(() => {}), KEEPALIVE_MS)
 
@@ -80,7 +85,7 @@ function sitePath (path) {
   if (!path) throw new Error('no page was named')
   const segments = path.split('/')
   if (segments.some(s => s === '' || s === '.' || s === '..')) throw new Error('that is not a page in this site')
-  return segments.map(encodeURIComponent).join('/')
+  return encodePath(path)
 }
 
 /**
@@ -102,16 +107,25 @@ function forward (event) {
 }
 
 /**
+ * Wait until the active worker is *this* script, activated.
+ *
+ * Any activated worker is not enough. A site with scripts on can register
+ * `sw.js?gate=<somewhere else>` at this same scope; the next visit's register()
+ * starts installing the right one, but the planted one is still active and
+ * would serve the site — with `frame-ancestors` naming the wrong gate, so the
+ * reader sees a blank frame. The same holds for an older build of sw.js. So the
+ * active worker's own script URL has to be the one registered here.
+ *
  * Every worker state is watched, the active one included: a reload during
- * activation finds `active` present but still `activating`, and watching only
- * the others left this waiting out its whole timeout.
+ * activation finds `active` present but still `activating`.
  */
-function activated (registration) {
+function activated (registration, script) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error('its worker did not start')), ACTIVATE_TIMEOUT_MS)
     const check = () => {
-      if (registration.active?.state !== 'activated') return false
+      const active = registration.active
+      if (active?.state !== 'activated' || active.scriptURL !== script) return false
       clearTimeout(timer)
       resolve()
       return true
@@ -171,9 +185,7 @@ function show (src, { scripts, sandbox }) {
 /** What the gate's viewer checks on its own origin, checked here instead. */
 function arrived (frame, src) {
   try {
-    const doc = frame.contentDocument
-    if (!doc || doc.URL !== new URL(src, location.href).href) return false
-    return (doc.body?.childElementCount ?? 0) > 0 || (doc.body?.textContent ?? '').trim().length > 0
+    return pageArrived(frame.contentDocument, new URL(src, location.href).href)
   } catch {
     return false
   }

@@ -32,12 +32,12 @@ import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
 import { SiteNotFound, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
-import { answerRelays, contentOrigin, isolation, isolationProblem, relayURL } from './isolation.js'
+import { answerRelays, contentOrigin, infoHashOf, isolation, isolationProblem, relayURL } from './isolation.js'
 import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
 } from './authors.js'
-import { Viewer, probeSandbox, sandboxWorks } from './viewer.js'
+import { Viewer, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
 
 const el = id => document.getElementById(id)
 
@@ -244,6 +244,7 @@ async function boot () {
         if (from === contentOrigin(infoHash)) ui.viewer.relayReported(report.relay, report.arrived, report.reason)
       }
     })
+    if (isolation) watchForRefusedFrames()
   } catch (err) {
     return fail(err)
   }
@@ -477,6 +478,25 @@ function watchJoining (torrent) {
 function stopJoining () {
   clearInterval(joiningTimer)
   joiningTimer = null
+}
+
+/**
+ * Turning isolation on takes two edits, config.js and the frame-src in
+ * index.html's policy. Miss the second and this page's own policy refuses every
+ * relay frame: nothing loads, nothing ever reports, and every site sat through
+ * the full timeout before being called "blank". The refusal is an event this
+ * page can hear, so it is heard, and the fix is named.
+ */
+function watchForRefusedFrames () {
+  document.addEventListener('securitypolicyviolation', event => {
+    if (event.effectiveDirective !== 'frame-src') return
+    let origin = null
+    try { origin = new URL(event.blockedURI).origin } catch {}
+    if (!infoHashOf(origin)) return
+    ui.viewer.relayRefused(
+      `this gate's own policy refused the frame — index.html must list ` +
+      `${isolation.scheme}//*.${isolation.content} in frame-src`)
+  })
 }
 
 /**
@@ -1537,10 +1557,14 @@ async function restoreWorker () {
 async function warnViewerStuck () {
   // The message goes up first: collecting diagnostics probes the network and
   // takes seconds, and the reader is already staring at an empty rectangle.
-  ui.notice.textContent =
-    'The site downloaded but the viewer stayed blank. Open Diagnostics in the ' +
-    'status bar — the "Viewer response" line says what the service worker ' +
-    'returned for it. The full picture is in the browser console too.'
+  // With content isolation on, the relay usually knows why, and says; that is
+  // worth more on the screen than a pointer to where it could be looked up.
+  const reason = isolation ? relayReport()?.reason : null
+  ui.notice.textContent = reason
+    ? `The site downloaded but was not shown: ${reason}. Diagnostics has the rest.`
+    : 'The site downloaded but the viewer stayed blank. Open Diagnostics in the ' +
+      'status bar — the "Viewer response" line says what the service worker ' +
+      'returned for it. The full picture is in the browser console too.'
   ui.notice.className = 'notice notice--error'
   ui.notice.hidden = false
 

@@ -3634,6 +3634,23 @@ async function runIsolated () {
   check('isolation: the bundle as committed ships with it off',
     /^export const CONTENT_ISOLATION = null$/m.test(config))
 
+  // The content host's nginx example serves relay.html's imports by name and
+  // 404s everything else. A new import the list does not name would work here,
+  // where every file is served, and break a real deployment silently.
+  const needed = new Set()
+  const walk = name => {
+    if (needed.has(name)) return
+    needed.add(name)
+    const source = readFileSync(new URL(`../js/${name}`, import.meta.url), 'utf8')
+    for (const [, dep] of source.matchAll(/^import [^'"]*['"]\.\/([\w-]+\.js)['"]/gm)) walk(dep)
+  }
+  walk('relay.js')
+  const nginx = readFileSync(new URL('../deploy/gate/content-isolation.conf.example', import.meta.url), 'utf8')
+  const allowed = new Set((nginx.match(/\^\/js\/\(([^)]+)\)/)?.[1] ?? '').split('|').map(n => `${n}.js`))
+  check('isolation: the content host example serves exactly what relay.html imports',
+    [...needed].every(n => allowed.has(n)) && [...allowed].every(n => needed.has(n)),
+    `imports ${[...needed].sort().join(' ')} / allowed ${[...allowed].sort().join(' ')}`)
+
   const isoPort = await freePort()
   const gate = `http://spore.localhost:${isoPort}`
   const content = `spore-content.localhost:${isoPort}`
@@ -3806,9 +3823,14 @@ async function runIsolated () {
       await Promise.all(registrations.map(r => r.unregister()))
       // And leaves one behind that would outlive scripts being turned off: a
       // narrower scope controls the site's pages ahead of the relay's worker.
-      await navigator.serviceWorker.register(
-        `/sw.js?gate=${encodeURIComponent('http://evil.localhost')}`, { scope: '/webtorrent/' })
-        .then(() => { result.plantedWorker = true }, err => { result.plantedWorker = err.name })
+      // Two of them: one at a narrower scope, and one at the relay's own scope
+      // naming another gate, which would still be the active worker when the
+      // relay next registers the right one.
+      const evil = `/sw.js?gate=${encodeURIComponent('http://evil.localhost')}`
+      await Promise.all([
+        navigator.serviceWorker.register(evil, { scope: '/webtorrent/' }),
+        navigator.serviceWorker.register(evil, { scope: '/' })
+      ]).then(() => { result.plantedWorker = true }, err => { result.plantedWorker = err.name })
       return result
     })
     check('isolation: a scripted site cannot read the gate\'s storage',
@@ -3846,6 +3868,14 @@ async function runIsolated () {
       text => text === 'Scripts are off.')
     check('isolation: turning scripts off takes effect, and the relay repairs its origin\'s workers',
       off === 'Scripts are off.', off)
+    // The worker actually serving the site must be the relay's, naming this
+    // gate. (Removing the relay's scriptURL check does not reliably fail this:
+    // the right worker activates within milliseconds of registering, so the
+    // planted one usually loses the race anyway. The check closes the window on
+    // slower devices; this asserts the outcome.)
+    const controller = await (await siteFrame(page)).evaluate(() => navigator.serviceWorker.controller?.scriptURL)
+    check('isolation: the site is served by the relay\'s own worker, naming this gate',
+      controller === `${siteOrigin}/sw.js?gate=${encodeURIComponent(gate)}`, controller)
     const workersAfter = await (page.frames().find(f => f.url().includes('/relay.html')))
       .evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(r => new URL(r.scope).pathname))
     check('isolation: only the relay\'s own registration is left', JSON.stringify(workersAfter) === '["/"]',
@@ -3866,6 +3896,40 @@ async function runIsolated () {
         /different domain from the gate/.test(said), said.trim().slice(0, 120))
     } finally {
       badServer.kill()
+    }
+
+    // --- config.js edited, index.html's frame-src forgotten ------------------
+    const halfPort = await freePort()
+    const halfServer = spawn(process.execPath, [
+      fileURLToPath(new URL('serve.mjs', import.meta.url)), String(halfPort),
+      '--isolation', `http://spore.localhost:${halfPort},spore-content.localhost:${halfPort}`,
+      '--isolation-without-frame-src'
+    ], { stdio: 'ignore' })
+    try {
+      await wait(500)
+      await page.goto(`http://spore.localhost:${halfPort}/`, { waitUntil: 'load' })
+      await page.waitForFunction(
+        () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+      const hash = await page.evaluate(async (site, paths) => {
+        const files = []
+        for (const path of paths) {
+          const res = await fetch(`/${site}/${path}`)
+          const file = new File([await res.blob()], path.split('/').pop())
+          file.fullPath = `${site}/${path}`
+          files.push(file)
+        }
+        const { publish } = await import('/js/publish.js')
+        return (await publish(files, site)).infoHash
+      }, SITE, SITE_FILES)
+      const started = Date.now()
+      await page.evaluate(h => { location.hash = h }, hash)
+      await page.waitForFunction(() => !document.getElementById('notice').hidden &&
+        document.getElementById('notice').textContent.includes('frame-src'), { timeout: 20_000 })
+      const notice = await page.$eval('#notice', n => n.textContent)
+      check('isolation: a forgotten frame-src is named on screen at once, not after a timeout',
+        Date.now() - started < 15_000, `${Math.round((Date.now() - started) / 1000)}s: ${notice.slice(0, 110)}`)
+    } finally {
+      halfServer.kill()
     }
   } finally {
     await page.close()
