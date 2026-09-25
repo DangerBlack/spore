@@ -22,5 +22,7 @@ services:
       context: ../..
       dockerfile: deploy/gate/Dockerfile
     restart: unless-stopped
+    # Not needed by nginx, which handles signals as PID 1; kept like the seeder.
+    init: true
     ports:
       - "8080:80"
