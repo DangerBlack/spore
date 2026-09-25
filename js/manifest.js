@@ -49,6 +49,7 @@
  */
 
 import { fromHex, toHex } from './bencode.js'
+import { ED25519_UNSUPPORTED, supportsEd25519 } from './identity.js'
 import { digestBlob } from './sha256.js'
 
 export const SIGNATURE_FILE = 'spore.sig'
@@ -276,6 +277,10 @@ export async function verifyManifest (contents, expectedKeyHex) {
     key = await crypto.subtle.importKey(
       'raw', fromHex(manifest.key), { name: 'Ed25519' }, false, ['verify'])
   } catch {
+    // Not the same failure as a bad key, and it must not be reported as one:
+    // a browser without Ed25519 rejects every key, and calling that "does not
+    // match its signature" accuses every honest author of being tampered with.
+    if (!(await supportsEd25519())) return { ok: false, unsupported: true, reason: ED25519_UNSUPPORTED }
     return { ok: false, reason: 'the declared key could not be imported' }
   }
 

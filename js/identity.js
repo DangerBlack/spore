@@ -46,8 +46,46 @@ const PKCS8_ED25519_PREFIX = new Uint8Array([
  * @property {string} hex            the public key as 64 hex characters
  */
 
+/**
+ * What to tell someone whose browser has no Ed25519 in WebCrypto — Chrome and
+ * Edge before 137, Firefox before 129, Safari before 17. Everything else in
+ * Spore works there; signing and checking signatures do not.
+ */
+export const ED25519_UNSUPPORTED =
+  'this browser cannot make or check Ed25519 signatures (Chrome or Edge 137, Firefox 129 and Safari 17 can)'
+
+/** RFC 8032 §7.1, test 1: a public key known to be valid. */
+const KNOWN_PUBLIC_KEY = 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+
+let ed25519 = null
+
+/**
+ * Can this browser do Ed25519 at all? Asked once, by importing a key that is
+ * certainly valid, so a failure means the algorithm and never the key.
+ *
+ * It matters because the two failures look alike from the call that fails. A
+ * browser without Ed25519 rejects every key, and a verifier that did not ask
+ * reported every signed site as not matching its own signature — telling
+ * readers that honest authors had been tampered with.
+ *
+ * @returns {Promise<boolean>}
+ */
+export function supportsEd25519 () {
+  ed25519 ??= crypto.subtle.importKey(
+    'raw', fromHex(KNOWN_PUBLIC_KEY), { name: 'Ed25519' }, false, ['verify']
+  ).then(() => true, () => false)
+  return ed25519
+}
+
+async function requireEd25519 () {
+  if (!(await supportsEd25519())) {
+    throw new Error(ED25519_UNSUPPORTED.charAt(0).toUpperCase() + ED25519_UNSUPPORTED.slice(1) + '.')
+  }
+}
+
 /** A fresh random identity. The private key must be exported and kept. */
 export async function createIdentity () {
+  await requireEd25519()
   const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])
   const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))
   return { privateKey: pair.privateKey, publicKey, hex: toHex(publicKey) }
@@ -68,6 +106,9 @@ export async function identityFromPassphrase (passphrase) {
   if (typeof passphrase !== 'string' || passphrase.length === 0) {
     throw new TypeError('a passphrase is required')
   }
+  // Before the derivation, which is slow on purpose: otherwise a browser that
+  // cannot sign spends seconds on it and only then says so.
+  await requireEd25519()
 
   const base = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(passphrase.normalize('NFKC')),
@@ -85,6 +126,7 @@ export async function identityFromSeed (seed) {
   if (!(seed instanceof Uint8Array) || seed.length !== 32) {
     throw new TypeError('seed must be 32 bytes')
   }
+  await requireEd25519()
 
   const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32)
   pkcs8.set(PKCS8_ED25519_PREFIX, 0)

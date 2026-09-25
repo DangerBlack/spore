@@ -130,7 +130,7 @@ const browser = await puppeteer.launch({
 })
 
 try {
-  if (!flag('--only-isolation')) {
+  if (!flag('--only-isolation') && !flag('--only-older')) {
     try {
       await run()
     } catch (err) {
@@ -138,12 +138,20 @@ try {
       results.push({ name: 'suite completed', pass: false })
     }
   }
-  // Separate, so a failure in either cannot hide the other.
-  try {
-    await runIsolated()
+  // Separate, so a failure in one cannot hide the others.
+  if (!flag('--only-older')) {
+    try {
+      await runIsolated()
+    } catch (err) {
+      console.error('\nThe isolation check itself broke:', err.stack ?? err.message)
+      results.push({ name: 'isolation suite completed', pass: false })
+    }
+  }
+  if (!flag('--only-isolation')) try {
+    await runOlderBrowsers()
   } catch (err) {
-    console.error('\nThe isolation check itself broke:', err.stack ?? err.message)
-    results.push({ name: 'isolation suite completed', pass: false })
+    console.error('\nThe older-browser check itself broke:', err.stack ?? err.message)
+    results.push({ name: 'older-browser suite completed', pass: false })
   }
 } finally {
   await browser.close()
@@ -4028,6 +4036,143 @@ async function runIsolated () {
   } finally {
     await page.close()
     isoServer.kill()
+  }
+}
+
+/**
+ * Browsers older than this one, simulated in it.
+ *
+ * The minimum in README ("Browser support") rests on three claims, each checked
+ * here by taking something away before any of the page's own scripts run:
+ *
+ *  - Without `Uint8Array` toHex/toBase64/fromHex — Chrome before 140 — the
+ *    polyfills carry the vendored WebTorrent, and a site still opens.
+ *  - Without something the minimum requires, the reader is told the browser is
+ *    too old, by name, instead of a page stuck on "Starting…".
+ *  - Without Ed25519, a signed site is "cannot check", never "tampered with",
+ *    and signing says so before spending seconds on key derivation.
+ */
+async function runOlderBrowsers () {
+  // --- no Uint8Array hex/base64 -------------------------------------------
+  const old = await browser.newPage()
+  await old.evaluateOnNewDocument(() => {
+    window.__native = { hex: Uint8Array.prototype.toHex, b64: Uint8Array.prototype.toBase64, from: Uint8Array.fromHex }
+    delete Uint8Array.prototype.toHex
+    delete Uint8Array.prototype.toBase64
+    delete Uint8Array.fromHex
+  })
+  try {
+    await old.goto(origin + '/', { waitUntil: 'load' })
+    await old.waitForFunction(
+      () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+    const agree = await old.evaluate(() => {
+      const n = window.__native
+      if (!n.hex) return 'this browser has no native methods to compare with'
+      const inputs = [new Uint8Array(0), new Uint8Array([0, 15, 16, 255]),
+        crypto.getRandomValues(new Uint8Array(65536)), new Uint8Array(200001).map((_, i) => i * 7)]
+      return inputs.every(a => a.toHex() === n.hex.call(a) && a.toBase64() === n.b64.call(a) &&
+        Uint8Array.fromHex(n.hex.call(a)).every((v, i) => v === a[i]))
+    })
+    check('older browsers: the polyfills give exactly what the native methods give', agree === true, agree)
+
+    const hash = await old.evaluate(async (site, paths) => {
+      const files = []
+      for (const path of paths) {
+        const res = await fetch(`/${site}/${path}`)
+        const file = new File([await res.blob()], path.split('/').pop())
+        file.fullPath = `${site}/${path}`
+        files.push(file)
+      }
+      const { publish } = await import('/js/publish.js')
+      return (await publish(files, site)).infoHash
+    }, SITE, SITE_FILES)
+    await old.evaluate(h => { location.hash = h }, hash)
+    const heading = await settle(old, () => document.querySelector('h1')?.textContent, text => text === 'Spore')
+    check('older browsers: without toHex/toBase64/fromHex, a site still publishes and opens',
+      /^[0-9a-f]{40}$/.test(hash) && heading === 'Spore', `${hash} ${heading}`)
+  } finally {
+    await old.close()
+  }
+
+  // --- missing something the minimum requires -----------------------------
+  const noDialog = await browser.newPage()
+  await noDialog.evaluateOnNewDocument(() => { delete HTMLDialogElement.prototype.showModal })
+  try {
+    await noDialog.goto(origin + '/', { waitUntil: 'load' })
+    await noDialog.waitForFunction(() => !!document.querySelector('.unsupported'), { timeout: 10_000 })
+    const page = await noDialog.evaluate(() => ({
+      text: document.querySelector('.unsupported').textContent,
+      booted: document.documentElement.hasAttribute('data-booted')
+    }))
+    check('older browsers: one missing a required feature is told so, and named',
+      /too old for Spore/.test(page.text) && /dialog windows/.test(page.text) && /Firefox 98/.test(page.text),
+      page.text.slice(0, 120))
+    check('older browsers: and the gate does not start there', page.booted === false)
+  } finally {
+    await noDialog.close()
+  }
+
+  // --- a bundle this browser cannot parse ---------------------------------
+  // Syntax cannot be feature-tested under the gate's policy, so it is caught
+  // when it fails: here the real vendored bundle is swapped for one that no
+  // browser parses, which is what an old engine does to the real one.
+  const unparsed = await browser.newPage()
+  await unparsed.setRequestInterception(true)
+  unparsed.on('request', request => request.url().endsWith('/vendor/webtorrent.min.js')
+    ? request.respond({ status: 200, contentType: 'text/javascript', body: 'export default class { #broken = }' })
+    : request.continue())
+  try {
+    await unparsed.goto(origin + '/', { waitUntil: 'load' })
+    await unparsed.waitForFunction(() => !!document.querySelector('.unsupported'), { timeout: 10_000 })
+    const text = await unparsed.$eval('.unsupported', e => e.textContent)
+    check('older browsers: a gate whose code this browser cannot parse says so instead of hanging',
+      /too old for Spore/.test(text) && /JavaScript feature/.test(text), text.slice(0, 120))
+  } finally {
+    await unparsed.close()
+  }
+
+  // --- no Ed25519 ---------------------------------------------------------
+  // A real signature, made here where Ed25519 exists, then checked in a page
+  // whose WebCrypto refuses the algorithm.
+  const identity = await import('../js/identity.js')
+  const manifest = await import('../js/manifest.js')
+  const author = await identity.createIdentity()
+  const signed = await manifest.signManifest(author.privateKey,
+    { key: author.hex, site: null, entries: [{ path: 'index.html', hash: 'a'.repeat(64) }] })
+
+  const noEd = await browser.newPage()
+  await noEd.evaluateOnNewDocument(() => {
+    const subtle = crypto.subtle
+    const isEd = algorithm => (typeof algorithm === 'string' ? algorithm : algorithm?.name) === 'Ed25519'
+    for (const method of ['importKey', 'generateKey', 'sign', 'verify']) {
+      const original = subtle[method].bind(subtle)
+      subtle[method] = (...args) => {
+        const algorithm = method === 'importKey' ? args[2] : args[0]
+        return isEd(algorithm)
+          ? Promise.reject(new DOMException('Unrecognized name.', 'NotSupportedError'))
+          : original(...args)
+      }
+    }
+  })
+  try {
+    await noEd.goto(origin + '/relay.html', { waitUntil: 'load' }) // same origin, gate not booted
+    const outcome = await noEd.evaluate(async (contents, key) => {
+      const { verifyManifest } = await import('/js/manifest.js')
+      const { identityFromPassphrase } = await import('/js/identity.js')
+      const verdict = await verifyManifest(contents, key)
+      const started = performance.now()
+      let signing
+      try { await identityFromPassphrase('a long phrase only I know') } catch (err) { signing = err.message }
+      return { verdict, signing, ms: Math.round(performance.now() - started) }
+    }, signed, author.hex)
+    check('older browsers: without Ed25519 a signed site is "cannot check", never "tampered with"',
+      outcome.verdict.ok === false && outcome.verdict.unsupported === true &&
+        /cannot make or check Ed25519/.test(outcome.verdict.reason), JSON.stringify(outcome.verdict))
+    check('older browsers: and signing says why at once, before deriving a key',
+      /cannot make or check Ed25519/.test(outcome.signing ?? '') && outcome.ms < 1000,
+      `${outcome.ms} ms: ${outcome.signing}`)
+  } finally {
+    await noEd.close()
   }
 }
 
