@@ -4060,6 +4060,7 @@ async function runOlderBrowsers () {
     delete Uint8Array.prototype.toHex
     delete Uint8Array.prototype.toBase64
     delete Uint8Array.fromHex
+    delete AbortSignal.timeout
   })
   try {
     await old.goto(origin + '/', { waitUntil: 'load' })
@@ -4074,6 +4075,16 @@ async function runOlderBrowsers () {
         Uint8Array.fromHex(n.hex.call(a)).every((v, i) => v === a[i]))
     })
     check('older browsers: the polyfills give exactly what the native methods give', agree === true, agree)
+
+    const timeout = await old.evaluate(() => new Promise(resolve => {
+      if (typeof AbortSignal.timeout !== 'function') return resolve({ missing: true })
+      const signal = AbortSignal.timeout(50)
+      const started = performance.now()
+      signal.addEventListener('abort', () =>
+        resolve({ ms: Math.round(performance.now() - started), reason: signal.reason?.name }))
+    }))
+    check('older browsers: and AbortSignal.timeout aborts on time, as a TimeoutError',
+      timeout.ms >= 40 && timeout.ms < 1000 && timeout.reason === 'TimeoutError', JSON.stringify(timeout))
 
     const hash = await old.evaluate(async (site, paths) => {
       const files = []
@@ -4173,6 +4184,86 @@ async function runOlderBrowsers () {
       `${outcome.ms} ms: ${outcome.signing}`)
   } finally {
     await noEd.close()
+  }
+
+  // --- mirroring a signed folder without Ed25519 ---------------------------
+  // The signature cannot be checked here, but the hashes can. A folder whose
+  // files match what was signed must go out with its signature intact; one
+  // that does not must still lose it. Built here, where Ed25519 exists.
+  const index = '<h1>signed elsewhere</h1>'
+  const pub = identity.formatSporePub(author.hex, 'Elsewhere', null)
+  const entries = await manifest.manifestEntries([
+    { path: 'index.html', bytes: new TextEncoder().encode(index) },
+    { path: 'spore.pub', bytes: new TextEncoder().encode(pub) }
+  ])
+  const sig = await manifest.signManifest(author.privateKey, { key: author.hex, site: null, entries })
+  const folder = body => [
+    { name: 'index.html', text: body },
+    { name: 'spore.pub', text: pub },
+    { name: 'spore.sig', text: sig }
+  ]
+
+  const mirror = await browser.newPage()
+  await mirror.evaluateOnNewDocument(() => {
+    const subtle = crypto.subtle
+    const isEd = algorithm => (typeof algorithm === 'string' ? algorithm : algorithm?.name) === 'Ed25519'
+    for (const method of ['importKey', 'generateKey', 'sign', 'verify']) {
+      const original = subtle[method].bind(subtle)
+      subtle[method] = (...args) => isEd(method === 'importKey' ? args[2] : args[0])
+        ? Promise.reject(new DOMException('Unrecognized name.', 'NotSupportedError'))
+        : original(...args)
+    }
+  })
+  const hand = files => mirror.evaluate(files => {
+    document.getElementById('share-unsigned').hidden = true
+    const data = new DataTransfer()
+    for (const file of files) data.items.add(new File([file.text], file.name))
+    const input = document.getElementById('files-input')
+    input.files = data.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, files)
+  try {
+    await mirror.goto(origin + '/', { waitUntil: 'load' })
+    await mirror.waitForFunction(
+      () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+
+    await hand(folder(index))
+    await mirror.waitForFunction(() => document.getElementById('signin-dialog').open ||
+      !document.getElementById('share-unsigned').hidden, { timeout: 40_000 })
+    const kept = await mirror.evaluate(async () => {
+      if (document.getElementById('signin-dialog').open) {
+        document.getElementById('signin-cancel').click()
+        return { asked: true, said: '' }
+      }
+      const link = document.getElementById('share-link').value
+      const { getClient } = await import('/js/swarm.js')
+      const torrent = await getClient().get(/btih:([0-9a-f]{40})/.exec(link)[1])
+      const read = async name => {
+        const file = torrent.files.find(f => f.path.endsWith(name))
+        return file ? new TextDecoder().decode(new Uint8Array(await file.arrayBuffer())) : null
+      }
+      return {
+        asked: document.getElementById('signin-dialog').open,
+        said: document.getElementById('share-unsigned').textContent,
+        pub: await read('spore.pub'),
+        sig: await read('spore.sig')
+      }
+    })
+    check('older browsers: without Ed25519, a signed folder that still matches is mirrored with its signature',
+      kept.pub === pub && kept.sig === sig && !kept.asked,
+      `${kept.pub === pub ? 'key kept' : 'key lost'}, ${kept.sig === sig ? 'signature kept' : 'signature lost'}`)
+    check('older browsers: and the publisher is told the signature was not checked here',
+      /cannot check signatures/.test(kept.said), kept.said.slice(0, 80))
+
+    // Tampered: the same signature over a page that was changed afterwards.
+    await hand(folder('<h1>changed after signing</h1>'))
+    await mirror.waitForFunction(() => document.getElementById('signin-dialog').open ||
+      !document.getElementById('share-unsigned').hidden, { timeout: 40_000 })
+    const asked = await mirror.$eval('#signin-dialog', d => d.open)
+    check('older browsers: but one whose files no longer match still loses its signature',
+      asked === true, asked ? 'treated as unsigned, and asked about signing' : 'republished as signed')
+  } finally {
+    await mirror.close()
   }
 }
 

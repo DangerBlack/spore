@@ -437,7 +437,8 @@ the vendored WebTorrent actually use, looked up in
 Without [`js/polyfills.js`](js/polyfills.js) the first row would be Chrome
 140, Firefox 133, Safari 18.2: the bundle calls `Uint8Array.prototype.toHex`,
 `toBase64` and `Uint8Array.fromHex`, all about a year old, and nothing opens
-without them. The polyfills cover exactly those three, only where missing.
+without them. It also calls `AbortSignal.timeout` (Chrome 124) when a magnet
+names a web seed. The polyfills cover exactly those four, only where missing.
 
 **Upgrading WebTorrent moves these numbers.** After replacing
 `vendor/webtorrent.min.js`, look for built-ins newer than the table (the
