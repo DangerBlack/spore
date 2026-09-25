@@ -25,6 +25,9 @@ services:
       context: ../..
       dockerfile: deploy/seeder/Dockerfile
     restart: unless-stopped
+    # node as PID 1 ignores the SIGTERM of `docker stop`, which then waits 10 s
+    # and kills it; a tiny init passes the signal on, so it stops at once.
+    init: true
 
     # Everything is configured here, so there are no arguments to get wrong and
     # the passphrase never appears in a command line — where `docker inspect`,
