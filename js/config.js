@@ -106,7 +106,7 @@ export const EXPECTED_WORKER_VERSION = '2026-09-25.3'
  * Diagnostics compares this against the copy deployed at the origin the page
  * came from, which turns that question into one line.
  */
-export const GATE_VERSION = '2026-09-25.1'
+export const GATE_VERSION = '2026-09-25.2'
 
 /**
  * How much a reader will pull off the swarm to check a signature unasked.
