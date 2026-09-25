@@ -408,6 +408,43 @@ A bare infohash is not a substitute: it names the content and says nothing
 about where to ask for it, so it opens on the device that already has the
 bytes and is useless to anybody else.
 
+## Browser support
+
+| | Chrome / Edge | Firefox | Safari (macOS, iOS) |
+|---|---|---|---|
+| **Open and publish sites** | **86** | **98** | **16** |
+| Signatures: publishing signed, checking who signed | 137 | 129 | 17 |
+| Publishing from a `.zip` | 103 | 113 | 16.4 |
+
+Below the first row the gate does not start, and says so by name: a browser
+missing something it needs gets "This browser is too old for Spore" and what
+is missing, rather than a page stuck on "Starting…". Below the other rows the
+gate still works and that one feature explains itself: without Ed25519 a signed
+site reads as *cannot check here*, never as altered, and signing refuses before
+deriving a key.
+
+Where the numbers come from — worked out, not guessed, from what the code and
+the vendored WebTorrent actually use, looked up in
+[MDN's compatibility data](https://github.com/mdn/browser-compat-data):
+
+- **Chrome 86** — `Element.replaceChildren`; the WebTorrent bundle's syntax
+  (logical assignment, class fields) needs 85.
+- **Firefox 98** — `<dialog>.showModal()`, which the gate's questions use.
+- **Safari 16** — class fields in the WebTorrent bundle's syntax.
+- **Ed25519 in WebCrypto** — Chrome 137, Firefox 129, Safari 17.
+- **`DecompressionStream('deflate-raw')`** — Chrome 103, Firefox 113, Safari 16.4.
+
+Without [`js/polyfills.js`](js/polyfills.js) the first row would be Chrome
+140, Firefox 133, Safari 18.2: the bundle calls `Uint8Array.prototype.toHex`,
+`toBase64` and `Uint8Array.fromHex`, all about a year old, and nothing opens
+without them. The polyfills cover exactly those three, only where missing.
+
+**Upgrading WebTorrent moves these numbers.** After replacing
+`vendor/webtorrent.min.js`, look for built-ins newer than the table (the
+bundle's method names survive minification, so a search works), and run
+`node tools/e2e.mjs --only-older`, which simulates the older browsers in a
+current one.
+
 ## What this is not
 
 - **Not anonymity.** Peers in a swarm see each other's IP addresses. Spore
