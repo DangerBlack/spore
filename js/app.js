@@ -231,6 +231,14 @@ async function boot () {
     // evaluated, and fail() reaches classes declared further down it, which
     // throws and leaves the gate on "Starting…" saying nothing at all.
     if (isolationProblem) throw isolationProblem
+    // A well-formed but wrong `gate` would have every relay post to some other
+    // origin, where the browser drops it: every site waits out its timeout
+    // while the gate looks healthy. Only this page can tell, so it does.
+    if (isolation && location.origin !== isolation.gate) {
+      throw new Error(
+        `CONTENT_ISOLATION in js/config.js names the gate ${isolation.gate}, but this gate ` +
+        `is being served from ${location.origin}, so sites would answer to the wrong page`)
+    }
     startClient(registration)
     answerRelays({
       server: getServer(),
@@ -1601,8 +1609,9 @@ you trust.`
 
 const SHARED_SCRIPTS_WARNING = `Run this site's scripts?
 
-This gate shows every site from its own address, so this site's scripts get the
-same access to this browser that Spore itself has. A hostile site could:
+This gate shows every site from the same address as Spore itself, so this
+site's scripts get the same access to this browser that Spore has. A hostile
+site could:
 
 - read and change what Spore keeps here for every site: sites kept offline,
   which authors you trust, which other sites may run scripts

@@ -25,7 +25,7 @@
  * stale one is invisible: everything looks healthy and nothing works. The
  * Diagnostics panel compares the two and says so.
  */
-const VERSION = '2026-09-24.1'
+const VERSION = '2026-09-25.1'
 
 const WEBTORRENT_PREFIX = 'webtorrent/'
 const PORT_TIMEOUT_MS = 5000
@@ -52,18 +52,31 @@ const POLICY_TIMEOUT_MS = 1000
  *    there is no reason to let it).
  *
  * A site with scripts on can re-register this worker with a different `gate`.
- * That changes its own origin and nothing else, which is the boundary.
+ * On its own content origin that changes nothing but itself, which is the
+ * boundary.
+ *
+ * The query alone does not select content mode, though, because a page can
+ * choose a query and cannot choose a hostname. In the default shared-origin
+ * mode a scripted site runs *on the gate's origin*, and could register
+ * `sw.js?gate=…` at the gate's own scope: had the query sufficed, the gate's
+ * worker would have become a content worker with no infohash in its hostname,
+ * refusing every request from every tab, and the watchdog — which checks that
+ * a registration exists, not which — would never have noticed. So content
+ * mode needs the hostname to be an infohash as well. On the gate the query is
+ * ignored and this is the gate's worker, as registered by the gate.
  */
 const GATE = new URL(self.location.href).searchParams.get('gate')
-const CONTENT_MODE = GATE !== null
+const HOST_INFOHASH = /^[0-9a-f]{40}$/.test(self.location.hostname.split('.')[0])
+  ? self.location.hostname.split('.')[0]
+  : null
+const CONTENT_MODE = GATE !== null && HOST_INFOHASH !== null
 const OWN_INFOHASH = CONTENT_MODE ? ownInfoHash() : null
 
 function ownInfoHash () {
-  const label = self.location.hostname.split('.')[0]
   let gateIsAnOrigin = false
   try { gateIsAnOrigin = new URL(GATE).origin === GATE } catch {}
   // Anything malformed serves nothing, rather than guessing what was meant.
-  return gateIsAnOrigin && /^[0-9a-f]{40}$/.test(label) ? label : null
+  return gateIsAnOrigin ? HOST_INFOHASH : null
 }
 
 /**

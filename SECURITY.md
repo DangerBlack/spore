@@ -223,6 +223,12 @@ code behind it is removed:
 - The relay removes any other service worker registration on its origin before
   showing the site, so one a scripted site planted cannot outlive the reader
   turning scripts off.
+- Content mode in `sw.js` needs an infohash *hostname* as well as relay.html's
+  `?gate=` query. A scripted site on the shared gate origin can register the
+  worker with any query, but cannot change the gate's hostname, so it cannot
+  turn the gate's worker into one that refuses every tab.
+- The gate refuses to boot if `CONTENT_ISOLATION.gate` is not its own origin,
+  rather than letting every relay answer to a page that is not listening.
 
 **The content domain must be a different registrable domain from the gate's.**
 The origin boundary holds either way, but the *site* boundary does not: under

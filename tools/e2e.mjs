@@ -321,6 +321,30 @@ async function run () {
     text => text === 'Scripts are on for this site.')
   check('the script runs once the reader opts in', after === 'Scripts are on for this site.', after)
 
+  // On this shared origin a scripted site can register the gate's own worker
+  // script with a `?gate=` query. That query selects content mode on a site's
+  // own origin; on the gate's it must do nothing, or the gate's worker would
+  // refuse every request from every tab. Put back afterwards either way.
+  const hijack = await (await siteFrame(page)).evaluate(async (hash, file) => {
+    const until = async (ok, ms = 10_000) => {
+      for (const started = Date.now(); Date.now() - started < ms;) {
+        if (await ok()) return true
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      return false
+    }
+    const active = async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL ?? ''
+    const result = {}
+    await navigator.serviceWorker.register(`/sw.js?gate=${encodeURIComponent('https://attacker.example')}`, { scope: '/' })
+    result.took = await until(async () => (await active()).includes('attacker'))
+    result.status = (await fetch(`/webtorrent/${hash}/${file}`, { cache: 'no-store' })).status
+    await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    result.restored = await until(async () => (await active()).endsWith('/sw.js'))
+    return result
+  }, infoHash, entry)
+  check('a scripted site re-registering the gate\'s worker with ?gate= cannot turn it against the gate',
+    hijack.took === true && hijack.status === 200 && hijack.restored === true, JSON.stringify(hijack))
+
   const sandboxAfter = await page.$eval('#viewer', f => f.getAttribute('sandbox'))
   // allow-same-origin is not a choice: a sandboxed opaque origin is never
   // served by a service worker. The opt-in adds allow-scripts and nothing else.
@@ -3896,6 +3920,23 @@ async function runIsolated () {
         /different domain from the gate/.test(said), said.trim().slice(0, 120))
     } finally {
       badServer.kill()
+    }
+
+    // --- a well-formed gate origin that is not this gate --------------------
+    const wrongPort = await freePort()
+    const wrongServer = spawn(process.execPath, [
+      fileURLToPath(new URL('serve.mjs', import.meta.url)), String(wrongPort),
+      '--isolation', `http://elsewhere.localhost:${wrongPort},spore-content.localhost:${wrongPort}`
+    ], { stdio: 'ignore' })
+    try {
+      await wait(500)
+      await page.goto(`http://spore.localhost:${wrongPort}/`, { waitUntil: 'load' })
+      await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 20_000 })
+      const said = await page.$eval('#error', e => e.textContent)
+      check('isolation: a gate origin that is not this gate is refused at boot, and named',
+        /is being served from http:\/\/spore\.localhost/.test(said), said.trim().slice(0, 140))
+    } finally {
+      wrongServer.kill()
     }
 
     // --- config.js edited, index.html's frame-src forgotten ------------------
