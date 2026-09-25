@@ -29,7 +29,7 @@ import {
 } from './identity.js'
 import {
   MAX_MANIFEST_BYTES, SIGNATURE_FILE, checkFile, manifestEntries, manifestWouldExceed,
-  missingFrom, signManifest, unlistedIn, verifyManifest
+  missingFrom, parseManifest, signManifest, unlistedIn, verifyManifest
 } from './manifest.js'
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
@@ -2191,6 +2191,13 @@ async function publishOne (files, name) {
  * this branch came from the publisher and the reader answering one question
  * with two pieces of code; this is the same question, and there is one answer
  * because there is one implementation.
+ *
+ * @returns {Promise<true|'unchecked'|false>} `'unchecked'` where this browser
+ *   cannot check Ed25519 but every file matches the hash the manifest gives it.
+ *   Such a publication goes out as it came: stripping a signature this browser
+ *   merely cannot read would destroy a real author's work on the strength of
+ *   nothing. Readers' browsers check it. A file that does not match is still a
+ *   publication that fails, whatever the browser.
  */
 async function verifiesAsItStands (files) {
   const at = path => files.find(file => pathOf(file) === path)
@@ -2207,11 +2214,21 @@ async function verifiesAsItStands (files) {
   if (pub.size > MAX_KEY_BYTES || sig.size > MAX_MANIFEST_BYTES) return false
 
   let manifest
+  let unchecked = false
   try {
     const key = parseSporePub(await pub.text())
-    const result = await verifyManifest(await sig.text(), key.hex)
-    if (!result.ok) return false
-    manifest = result.manifest
+    const contents = await sig.text()
+    const result = await verifyManifest(contents, key.hex)
+    if (result.ok) {
+      manifest = result.manifest
+    } else if (result.unsupported) {
+      // Only the signature is out of reach; the hashes are not, and they are
+      // what says whether these files are the ones that were signed.
+      manifest = parseManifest(contents)
+      unchecked = true
+    } else {
+      return false
+    }
   } catch {
     // Unreadable or malformed: this publication declares nothing usable, which
     // is exactly how a reader treats it.
@@ -2234,7 +2251,7 @@ async function verifiesAsItStands (files) {
     if (path === SIGNATURE_FILE) continue
     if (!(await checkFile(manifest, path, file)).ok) return false
   }
-  return true
+  return unchecked ? 'unchecked' : true
 }
 
 /**
@@ -2259,7 +2276,11 @@ function noteWhatChanged ({
       'out: files an operating system writes into a folder, which are not part ' +
       'of the site and cannot be signed as if they were.')
   }
-  if (mirror) {
+  if (mirror === 'unchecked') {
+    said.push('This was already signed. This browser cannot check signatures, ' +
+      'but every file matches what was signed, so it went out untouched \u2014 ' +
+      'readers\u2019 browsers will check the signature itself.')
+  } else if (mirror) {
     // Deliberately not "byte for byte": the files are untouched, but a
     // torrent's name is part of its infohash and does not survive being picked
     // out of one swarm and handed back through a file picker.

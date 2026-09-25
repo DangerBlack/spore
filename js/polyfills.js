@@ -1,20 +1,20 @@
 /**
- * The three recent built-ins the vendored WebTorrent calls, where they are
- * missing.
+ * The recent built-ins the vendored WebTorrent calls, where they are missing.
  *
  * `vendor/webtorrent.min.js` encodes infohashes and more with the native
  * `Uint8Array.prototype.toHex`, `Uint8Array.prototype.toBase64` and
  * `Uint8Array.fromHex` — Chrome 140, Firefox 133 and Safari 18.2, none of them
  * much more than a year old. Without them nothing opens at all, and the error
- * a reader sees is `e.toBase64 is not a function`. With them, the oldest
- * browsers Spore runs on are set by other things (see README, "Browser
- * support"), several years older.
+ * a reader sees is `e.toBase64 is not a function`. It also calls
+ * `AbortSignal.timeout` (Chrome 124) on its HTTP path, reached when a magnet
+ * names a web seed. With these, the oldest browsers Spore runs on are set by
+ * other things (see README, "Browser support"), several years older.
  *
- * Only these three, because they are what the bundle actually calls — the
- * list came from reading it, not from a guess at what might be needed — and
- * only where missing: a native implementation is never replaced. They follow
- * the specification for the calls the bundle makes (no options); anything
- * else is left to the platform.
+ * Only these four, because they are what the bundle actually calls — the list
+ * came from reading it, not from a guess at what might be needed — and only
+ * where missing: a native implementation is never replaced. They follow the
+ * specification for the calls the bundle makes (no options); anything else is
+ * left to the platform.
  *
  * Imported first by js/app.js, so it runs before WebTorrent is evaluated.
  */
@@ -41,6 +41,12 @@ define(Uint8Array.prototype, 'toBase64', function toBase64 () {
     binary += String.fromCharCode.apply(null, this.subarray(i, i + 0x8000))
   }
   return btoa(binary)
+})
+
+define(AbortSignal, 'timeout', function timeout (milliseconds) {
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), milliseconds)
+  return controller.signal
 })
 
 define(Uint8Array, 'fromHex', function fromHex (string) {

@@ -18,10 +18,11 @@ cp package/LICENSE vendor/webtorrent.LICENSE
 ```
 
 Then check the oldest browsers still work, because the bundle is what sets the
-minimum in the README's "Browser support". Version 3.0.21 calls three built-ins
+minimum in the README's "Browser support". Version 3.0.21 calls four built-ins
 younger than everything else (`Uint8Array.prototype.toHex`, `toBase64`,
-`Uint8Array.fromHex`), which is why `js/polyfills.js` exists. Search the new
-bundle for others, update the polyfills or the table, and run:
+`Uint8Array.fromHex`, and `AbortSignal.timeout` on its HTTP path), which is why
+`js/polyfills.js` exists. Search the new bundle for others, update the
+polyfills or the table, and run:
 
 ```sh
 node tools/e2e.mjs --only-older
