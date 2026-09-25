@@ -17,6 +17,16 @@ cp package/dist/webtorrent.min.js vendor/
 cp package/LICENSE vendor/webtorrent.LICENSE
 ```
 
+Then check the oldest browsers still work, because the bundle is what sets the
+minimum in the README's "Browser support". Version 3.0.21 calls three built-ins
+younger than everything else (`Uint8Array.prototype.toHex`, `toBase64`,
+`Uint8Array.fromHex`), which is why `js/polyfills.js` exists. Search the new
+bundle for others, update the polyfills or the table, and run:
+
+```sh
+node tools/e2e.mjs --only-older
+```
+
 Note: we deliberately do **not** vendor `dist/sw.min.js`. Our own `sw.js` is a
 re-implementation of that worker's message protocol which additionally injects a
 per-torrent Content-Security-Policy — see the comments in `sw.js`.
