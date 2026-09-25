@@ -6,6 +6,9 @@
  * to whichever host is serving this bundle.
  */
 
+// First, before anything that loads WebTorrent: modules are evaluated in the
+// order they are imported, and the bundle needs these on older browsers.
+import './polyfills.js'
 import { TORRENT_PATH, VERIFY_WITHOUT_ASKING_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
@@ -180,7 +183,12 @@ let keptHashes = new Set()
  */
 let authorship = null
 
-boot()
+// js/support.js has already looked at this browser. Marked either way: it
+// listens for a SyntaxError only until the gate has started.
+if (!document.documentElement.hasAttribute('data-unsupported')) {
+  document.documentElement.setAttribute('data-booted', '')
+  boot()
+}
 
 async function boot () {
   servePolicyQueries()
@@ -1082,7 +1090,8 @@ async function verifyContent (torrent, entry, key) {
   }
 
   const result = await verifyManifest(manifest.contents, key.hex)
-  if (!result.ok) return settle({ status: 'broken', reason: result.reason })
+  // A browser that cannot check a signature has not found a bad one.
+  if (!result.ok) return settle({ status: result.unsupported ? 'unverified' : 'broken', reason: result.reason })
 
   // Checking means hashing, and hashing means downloading. Since the digest
   // learned to stream, nothing stops this from pulling a four-gigabyte film off

@@ -126,6 +126,16 @@ button:hover, .button:hover { border-color: var(--accent); }
   background: #fff; /* sites assume a page, not a dark app shell */
 }
 
+/* js/support.js, on a browser too old to run the gate. Plain, and in this
+   stylesheet because the page's policy allows no inline style. */
+.unsupported {
+  max-width: 36rem;
+  margin: 4rem auto;
+  padding: 0 1rem;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+.unsupported-detail { color: #666; font-size: 0.9em; }
+
 .notice {
   margin: 24px auto;
   max-width: 40rem;
