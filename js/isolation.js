@@ -65,7 +65,8 @@ export const isolation = (() => {
     const normalized = new URL(`${scheme}//${content}`).host
     const gateHost = new URL(gate).hostname
     const contentHost = new URL(`${scheme}//${content}`).hostname
-    if (contentHost === gateHost || contentHost.endsWith(`.${gateHost}`)) {
+    if (contentHost === gateHost || contentHost.endsWith(`.${gateHost}`) ||
+        gateHost.endsWith(`.${contentHost}`)) {
       throw new Error(
         `content (${content}) must be on a different domain from the gate (${gateHost}), ` +
         'e.g. spore-content.example rather than content.' + gateHost)

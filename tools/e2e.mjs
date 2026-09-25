@@ -3922,6 +3922,32 @@ async function runIsolated () {
       badServer.kill()
     }
 
+    // --- a gate on a hostname shaped like a site's -------------------------
+    // The main, shared-origin server answers any hostname; this one begins
+    // with forty hex characters, which sw.js would take for a site's origin.
+    await page.goto(`http://${'c'.repeat(40)}.localhost:${port}/`, { waitUntil: 'load' })
+    await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 20_000 })
+    const hashHost = await page.$eval('#error', e => e.textContent)
+    check('a gate on a hostname that begins with an infohash refuses to start, and says why',
+      /begins with an infohash/.test(hashHost), hashHost.trim().slice(0, 140))
+
+    // --- a gate under its own content domain --------------------------------
+    const underPort = await freePort()
+    const underServer = spawn(process.execPath, [
+      fileURLToPath(new URL('serve.mjs', import.meta.url)), String(underPort),
+      '--isolation', `http://gate.spore-content.localhost:${underPort},spore-content.localhost:${underPort}`
+    ], { stdio: 'ignore' })
+    try {
+      await wait(500)
+      await page.goto(`http://gate.spore-content.localhost:${underPort}/`, { waitUntil: 'load' })
+      await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 20_000 })
+      const said = await page.$eval('#error', e => e.textContent)
+      check('isolation: a gate under its own content domain is refused too',
+        /different domain from the gate/.test(said), said.trim().slice(0, 120))
+    } finally {
+      underServer.kill()
+    }
+
     // --- a well-formed gate origin that is not this gate --------------------
     const wrongPort = await freePort()
     const wrongServer = spawn(process.execPath, [

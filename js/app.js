@@ -230,6 +230,15 @@ async function boot () {
     // after the first await, not before: until then this module is still being
     // evaluated, and fail() reaches classes declared further down it, which
     // throws and leaves the gate on "Starting…" saying nothing at all.
+    // sw.js serves a hostname that begins with an infohash as that site's own
+    // origin. A gate on such a hostname — isolation on or off — could have its
+    // worker re-registered into that mode by a scripted site and refuse every
+    // tab, so it does not start at all.
+    if (/^[0-9a-f]{40}\./.test(location.hostname)) {
+      throw new Error(
+        `this gate is served from ${location.hostname}, which begins with an infohash — ` +
+        'the shape of a site\'s own address — and cannot be run safely there')
+    }
     if (isolationProblem) throw isolationProblem
     // A well-formed but wrong `gate` would have every relay post to some other
     // origin, where the browser drops it: every site waits out its timeout

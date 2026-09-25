@@ -25,7 +25,7 @@
  * stale one is invisible: everything looks healthy and nothing works. The
  * Diagnostics panel compares the two and says so.
  */
-const VERSION = '2026-09-25.1'
+const VERSION = '2026-09-25.2'
 
 const WEBTORRENT_PREFIX = 'webtorrent/'
 const PORT_TIMEOUT_MS = 5000
@@ -63,7 +63,10 @@ const POLICY_TIMEOUT_MS = 1000
  * refusing every request from every tab, and the watchdog — which checks that
  * a registration exists, not which — would never have noticed. So content
  * mode needs the hostname to be an infohash as well. On the gate the query is
- * ignored and this is the gate's worker, as registered by the gate.
+ * ignored and this is the gate's worker, as registered by the gate. A gate
+ * whose own hostname begins with an infohash would defeat that, so the gate
+ * refuses to start on one (js/app.js); nothing here can know the configured
+ * content domain, since a classic worker cannot import config.js.
  */
 const GATE = new URL(self.location.href).searchParams.get('gate')
 const HOST_INFOHASH = /^[0-9a-f]{40}$/.test(self.location.hostname.split('.')[0])
