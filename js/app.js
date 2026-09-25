@@ -32,7 +32,9 @@ import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
 import { SiteNotFound, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
-import { answerRelays, contentOrigin, infoHashOf, isolation, isolationProblem, relayURL } from './isolation.js'
+import {
+  answerRelays, contentOrigin, infoHashOf, isSiteHostname, isolation, isolationProblem, relayURL
+} from './isolation.js'
 import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
@@ -234,7 +236,7 @@ async function boot () {
     // origin. A gate on such a hostname — isolation on or off — could have its
     // worker re-registered into that mode by a scripted site and refuse every
     // tab, so it does not start at all.
-    if (/^[0-9a-f]{40}\./.test(location.hostname)) {
+    if (isSiteHostname(location.hostname)) {
       throw new Error(
         `this gate is served from ${location.hostname}, which begins with an infohash — ` +
         'the shape of a site\'s own address — and cannot be run safely there')

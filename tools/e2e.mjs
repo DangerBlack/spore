@@ -3658,6 +3658,33 @@ async function runIsolated () {
   check('isolation: the bundle as committed ships with it off',
     /^export const CONTENT_ISOLATION = null$/m.test(config))
 
+  // One rule, two copies: sw.js decides it is serving a site from the shape of
+  // its hostname, and the gate refuses to start on a hostname of that shape. A
+  // classic worker cannot import the gate's module, so the copies are run side
+  // by side here — the real sw.js, in a sandbox — over hostnames at the edges.
+  const { runInNewContext } = await import('node:vm')
+  const { isSiteHostname } = await import('../js/isolation.js')
+  const swSource = readFileSync(new URL('../sw.js', import.meta.url), 'utf8')
+  const workerSays = hostname => {
+    const sandbox = {
+      URL,
+      self: {
+        location: { href: `https://${hostname}/sw.js?gate=https%3A%2F%2Fgate.example`, hostname },
+        registration: { scope: `https://${hostname}/` },
+        addEventListener () {}
+      }
+    }
+    runInNewContext(`${swSource}\n;globalThis.__content = CONTENT_MODE`, sandbox)
+    return sandbox.__content
+  }
+  const hash = 'c'.repeat(40)
+  const hosts = [hash, `${hash}.localhost`, `${hash}.spore-content.example`, 'spore.localhost',
+    'c'.repeat(39), `${'c'.repeat(41)}.example`, `x${hash}.example`, `${hash}x`]
+  const disagree = hosts.filter(h => workerSays(h) !== isSiteHostname(h))
+  check('the gate and sw.js agree, host by host, on what a site\'s hostname looks like',
+    disagree.length === 0 && workerSays(hash) === true && workerSays('spore.localhost') === false,
+    disagree.length ? `disagree on ${disagree.join(', ')}` : `${hosts.length} hostnames`)
+
   // The content host's nginx example serves relay.html's imports by name and
   // 404s everything else. A new import the list does not name would work here,
   // where every file is served, and break a real deployment silently.

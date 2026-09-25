@@ -105,6 +105,20 @@ export function encodePath (path) {
   return path.split('/').map(encodeURIComponent).join('/')
 }
 
+/**
+ * Does this hostname have the shape of a site's own origin?
+ *
+ * The exact rule sw.js applies to decide it is serving a site rather than the
+ * gate — the first label is a 40-character infohash — written in the same form
+ * so the two cannot disagree. (sw.js is a classic worker and cannot import
+ * this; the expression there must stay identical.) An earlier version here
+ * required a dot after the hash, and so missed a single-label hostname that sw.js
+ * would still have taken for a site.
+ */
+export function isSiteHostname (hostname) {
+  return INFOHASH.test(hostname.split('.')[0])
+}
+
 /** The infohash whose origin this is, or null if it is not one of ours. */
 export function infoHashOf (origin) {
   if (!isolation || typeof origin !== 'string') return null
