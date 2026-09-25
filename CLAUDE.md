@@ -50,7 +50,11 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
 ## Modello di sicurezza (Fase 1, minimo ma non negoziabile)
 
 - Ogni sito vive in un **iframe sandboxed**, isolato dalla chrome del gate
-  (address bar, controlli). Un sito ostile non deve poter toccare l'app.
+  (address bar, controlli). Un sito ostile *senza script* non deve poter
+  toccare l'app. Con gli script accesi, di default, sì: i siti condividono
+  l'origin del gate (un iframe a origin opaco non è mai controllato dal service
+  worker), quindi uno script raggiunge storage, chiave ricordata e worker di
+  Spore. È il "known hole" di SECURITY.md, e il gate lo dice prima di chiedere.
 - **CSP stretta di default**: `script-src 'none'` e egress di rete bloccato
   (tutto deve risolvere dentro il torrent; URL esterni bloccati).
   Motivo: anche senza JS, un `<img>`/`background-image`/form verso un URL esterno
@@ -58,7 +62,12 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
 - **Script opt-in per-sito**: l'utente attiva i `<script>` a mano per un sito.
   Anche da attivati, l'egress di rete resta vincolato.
 - **Isolamento tra torrent**: un torrent non deve poter leggere le risorse di un
-  altro (CSP + origini separate). Cross-torrent solo via path espliciti.
+  altro. Lo fa `sw.js` in codice (`askingTorrent`, 403), non la CSP: la CSP con
+  path per torrent era applicata diversamente da Firefox e Chrome.
+- **Isolamento opzionale per-sito** (`CONTENT_ISOLATION`, spento di default):
+  ogni sito su `<infohash>.<dominio content>`, così il confine d'origin del
+  browser separa il sito dal gate. Richiede dominio proprio, DNS e TLS wildcard;
+  un mirror statico semplice non può attivarlo.
 
 ## Vincoli e bagni di realtà (documentare, non nascondere)
 
@@ -92,6 +101,12 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
   rimandata. In Fase 1 la fiducia iniziale resta out-of-band, e va bene così.
 - **Anonimato / Tor / .onion**: scartato dal design.
 
+Costruito comunque, su richiesta esplicita, fuori dal perimetro MVP originale
+(non è un invito ad aggiungere altro): il seeder always-on (`deploy/seeder/`,
+`tools/seed.mjs`), gli aggiornamenti firmati via estensione `sp_update`
+(`spore.pub`, `spore.sig`, spec/mutable-sites.md) e l'isolamento per-sito
+(spec/second-origin-isolation.md).
+
 ## Come lavorare su questo repo
 
 - Preferisci sempre la soluzione più semplice che chiude uno dei due obiettivi MVP.
@@ -102,6 +117,14 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
   per i mirror con dominio proprio, DNS e certificato wildcard, mai un default.
   Ogni modifica deve tenere verdi entrambe le metà di `tools/e2e.mjs`, quella a
   origin condiviso e quella isolata. Vedi spec/second-origin-isolation.md.
+- **Test**: `npm ci`, poi `CHROME=/usr/bin/chromium npm test` (circa 4 minuti,
+  Chromium vero); `node tools/e2e.mjs --only-isolation` per la sola parte
+  isolata. Nessun certificato né DNS: `*.localhost` è loopback e secure context.
+  La macchina di sviluppo può ospitare altri servizi: una suite alla volta,
+  senza saturare RAM/CPU.
+- Una prova che dice "passa" vale solo se è stato visto fallire: quando si
+  aggiunge un controllo di sicurezza, si verifica che il test diventi rosso
+  togliendo il controllo.
 - Path relativi ovunque; un sito pubblicato deve renderizzare uguale a come
   farebbe servito da un server statico qualsiasi.
 - Ogni scelta che tocca la sicurezza (CSP, sandbox, egress) va motivata nel PR:
