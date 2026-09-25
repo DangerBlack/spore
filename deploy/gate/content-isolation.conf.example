@@ -57,7 +57,7 @@ server {
     }
 
     # What relay.html imports.
-    location ~ ^/js/(relay|isolation|config|policy)\.js$ {
+    location ~ ^/js/(relay|isolation|config|policy|viewer)\.js$ {
         add_header Cache-Control "no-cache";
     }
 

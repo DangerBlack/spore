@@ -12,9 +12,11 @@
  * A sandboxed document without `allow-same-origin` gets an opaque origin, and a
  * client with an opaque origin is never controlled by a service worker — the
  * navigation is not intercepted and neither is a single subresource. Since the
- * worker is how sites are served at all, sites have to share the gate's origin.
- * (`Content-Security-Policy: sandbox` on the response fails the same way one
- * step later: the document loads, then everything inside it 404s.)
+ * worker is how sites are served at all, sites have to share *an* origin with
+ * a worker — by default the gate's own. (`Content-Security-Policy: sandbox` on
+ * the response fails the same way one step later: the document loads, then
+ * everything inside it 404s.) With content isolation on, that origin is the
+ * site's own instead; see `showRelay` and spec/second-origin-isolation.md.
  *
  * So isolation rests on two layers instead:
  *
@@ -30,13 +32,15 @@
  *
  * ## The honest limit
  *
- * A site the reader opts in to scripts *does* run on the gate's origin and can
- * therefore reach `window.parent` and tamper with the gate's own chrome. CSP
- * still confines what it can load, and it cannot install a service worker of
- * its own (a registration's script fetch bypasses our worker, and scope is
- * path-limited because we never send `Service-Worker-Allowed`), but the address
- * bar above it stops being trustworthy. Fixing that properly needs a second
- * origin for content, which is a Phase 2 change. Until then the opt-in asks.
+ * A site the reader opts in to scripts *does* run on the gate's origin — unless
+ * the mirror has turned content isolation on — and can therefore reach
+ * `window.parent` and tamper with the gate's own chrome. CSP still confines
+ * what it can load, and it cannot install a service worker of its own (a
+ * registration's script fetch bypasses our worker, and scope is path-limited
+ * because we never send `Service-Worker-Allowed`), but the address bar above it
+ * stops being trustworthy. The fix is a second origin for content: built, as
+ * `CONTENT_ISOLATION`, for mirrors that can run it, and off by default because
+ * a plain static host cannot. Where it is off, the opt-in says so and asks.
  */
 
 /** How long a site's entry page gets to load before we call it stuck. */
@@ -81,6 +85,20 @@ let lastRelayReport = null
 
 export function relayReport () {
   return lastRelayReport
+}
+
+/**
+ * Is this document the page asked for, with something in it?
+ *
+ * One rule for both viewers: the gate asks it of its own frame, and relay.js
+ * asks it of the site's frame on the content origin, where the gate cannot
+ * look. Two copies of it would drift, and the two modes would disagree about
+ * whether the same site had arrived.
+ */
+export function pageArrived (document, url) {
+  if (!document || document.URL !== url) return false
+  return (document.body?.childElementCount ?? 0) > 0 ||
+    (document.body?.textContent ?? '').trim().length > 0
 }
 
 /**
@@ -169,19 +187,7 @@ export class Viewer {
     // rendered under the previous policy — which is how "enable scripts" used
     // to silently do nothing until the reader navigated away and back.
     await this.clear()
-
-    // On an engine that refuses to serve a sandboxed frame, the choice is
-    // between showing the site without the attribute and not showing it at
-    // all. The second layer, the Content-Security-Policy the worker attaches,
-    // is untouched either way: no scripts, and no request that leaves the
-    // torrent. What is given up is the sandbox's own protections, chiefly that
-    // a click cannot navigate the gate away or open an outside tab. Scripts
-    // are refused outright in this mode, because shared origin without even a
-    // sandbox is not a trade worth offering.
-    if (sandboxIsServed === false && this.frame.hasAttribute('sandbox')) {
-      this.frame = this.withoutSandbox()
-    }
-    else this.frame.setAttribute('sandbox', sandbox.join(' '))
+    this.prepare(sandbox)
 
     // Watch the navigation rather than assume it. A viewer stuck on
     // `about:blank` is the worst failure this app has: the reader sees an empty
@@ -218,12 +224,10 @@ export class Viewer {
    */
   async showRelay (url) {
     await this.clear()
-
-    if (sandboxIsServed === false && this.frame.hasAttribute('sandbox')) {
-      this.frame = this.withoutSandbox()
-    } else if (sandboxIsServed !== false) {
-      this.frame.setAttribute('sandbox', 'allow-same-origin allow-scripts')
-    }
+    this.prepare(['allow-same-origin', 'allow-scripts'])
+    // A report belongs to the site it was about. Left in place, Diagnostics
+    // would describe the previous site as if it were this one.
+    lastRelayReport = null
 
     const settled = new Promise(resolve => {
       const pending = {
@@ -257,12 +261,45 @@ export class Viewer {
   }
 
   /**
+   * The relay was never allowed to load at all — the gate's own policy refused
+   * the frame. No relay will ever report, so this says so at once, with the
+   * reason, instead of letting the viewer wait out its timeout.
+   */
+  relayRefused (reason) {
+    if (!this.pending) return
+    lastRelayReport = { arrived: false, reason }
+    this.pending.finish(false)
+  }
+
+  /**
+   * Give the frame these sandbox flags — both viewers go through here.
+   *
+   * On an engine that refuses to serve a sandboxed frame, the choice is between
+   * showing the site without the attribute and not showing it at all. The
+   * second layer, the Content-Security-Policy the worker attaches, is untouched
+   * either way: no scripts, and no request that leaves the torrent. What is
+   * given up is the sandbox's own protections, chiefly that a click cannot
+   * navigate the gate away or open an outside tab. Scripts are refused outright
+   * in this mode, because shared origin without even a sandbox is not a trade
+   * worth offering.
+   *
+   * @param {string[]} flags
+   */
+  prepare (flags) {
+    if (sandboxIsServed === false && this.frame.hasAttribute('sandbox')) {
+      this.frame = this.withoutSandbox()
+    }
+    else this.frame.setAttribute('sandbox', flags.join(' '))
+  }
+
+  /**
    * Did the frame really end up showing that page?
    *
    * The `load` event is not the answer on its own: a navigation the browser
    * refuses still fires it, having put an error page — or nothing — in the
-   * frame. The document's own URL is the honest signal. Sites are served from
-   * this origin (see above), so the frame is readable from here.
+   * frame. The document's own URL is the honest signal. On the gate's own
+   * origin the frame is readable from here; with content isolation on it is
+   * not, and relay.js asks `pageArrived` the same question from inside.
    */
   landedOn (url) {
     let document
@@ -271,10 +308,7 @@ export class Viewer {
     } catch {
       return true // cross-origin somehow: no view, so no accusation
     }
-    if (!document) return false
-    if (document.URL !== url) return false
-    return (document.body?.childElementCount ?? 0) > 0 ||
-      (document.body?.textContent ?? '').trim().length > 0
+    return pageArrived(document, url)
   }
 
   /** @returns {Promise<void>} resolves when the frame holds nothing */

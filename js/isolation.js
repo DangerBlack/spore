@@ -57,14 +57,20 @@ export const isolation = (() => {
     // sharing its process. The origin boundary holds either way; the site
     // boundary does not. Only the obvious case can be caught without the
     // Public Suffix List, so the rest is on the documentation.
+    const scheme = new URL(gate).protocol
+    // Spelled the way a browser spells an origin: lower case, and without a
+    // port that is the scheme's default. `spore-content.example:443` would
+    // otherwise never equal the origin the browser reports, and every site
+    // would be refused as not ours.
+    const normalized = new URL(`${scheme}//${content}`).host
     const gateHost = new URL(gate).hostname
-    const contentHost = content.replace(/:\d+$/, '')
+    const contentHost = new URL(`${scheme}//${content}`).hostname
     if (contentHost === gateHost || contentHost.endsWith(`.${gateHost}`)) {
       throw new Error(
         `content (${content}) must be on a different domain from the gate (${gateHost}), ` +
         'e.g. spore-content.example rather than content.' + gateHost)
     }
-    return { gate, scheme: new URL(gate).protocol, content }
+    return { gate, scheme, content: normalized }
   } catch (err) {
     problem = new Error(`CONTENT_ISOLATION in js/config.js is not usable: ${err.message}`)
     return null
@@ -85,6 +91,17 @@ export function contentOrigin (infoHash) {
   if (!isolation) throw new Error('content isolation is off')
   if (!INFOHASH.test(infoHash)) throw new Error(`not an infohash: ${infoHash}`)
   return `${isolation.scheme}//${infoHash}.${isolation.content}`
+}
+
+/**
+ * A path inside a torrent, as a URL path: each segment escaped, slashes kept.
+ *
+ * Here rather than in site.js because relay.js needs it too and must not load
+ * what site.js imports; site.js's `entryURL` uses this same function, so the
+ * gate's viewer and the relay cannot spell one file two ways.
+ */
+export function encodePath (path) {
+  return path.split('/').map(encodeURIComponent).join('/')
 }
 
 /** The infohash whose origin this is, or null if it is not one of ours. */
