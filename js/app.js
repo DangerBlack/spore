@@ -13,7 +13,7 @@ import { TORRENT_PATH, VERIFY_WITHOUT_ASKING_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
-import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts } from './magnet.js'
+import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts, withPage } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
   checkPublishable, filesFromDrop, filesFromInput, filesFromPicker, publish
@@ -269,8 +269,13 @@ async function boot () {
         let from = null
         try { from = new URL(report.relay).origin } catch {}
         if (from === contentOrigin(infoHash)) ui.viewer.relayReported(report.relay, report.arrived, report.reason)
-      }
+      },
+      onPage: followPage
     })
+    // On this origin the frame is readable, so the gate looks for itself.
+    // `load` does not bubble, but it does pass the document on the way down,
+    // which catches the frame even after `withoutSandbox` has replaced it.
+    if (!isolation) document.addEventListener('load', onViewerLoad, true)
     if (isolation) watchForRefusedFrames()
   } catch (err) {
     return fail(err)
@@ -412,14 +417,23 @@ async function open (ref) {
         'disabled in Firefox private windows.)')
     }
 
-    current = { torrent, ref }
-    watchForTrouble(torrent, ref)
+    current = { torrent, ref, entry, magnetURI: parsed.magnetURI, page: null }
+    watchForTrouble(torrent)
 
     // A torrent without an index.html is not a broken site, it is not a site.
     // Refusing it outright made a whole category of torrent — an archive, an
     // album, a dataset — a dead end, when its contents are perfectly readable.
-    if (entry) await render(torrent, entry)
-    else { showListing(torrent); nameAuthor(torrent, null) }
+    if (!entry) { showListing(torrent); nameAuthor(torrent, null); return }
+
+    const page = parsed.page ? pageIn(torrent, entry, parsed.page) : null
+    await render(torrent, entry, page)
+    if (parsed.page && !page) {
+      ui.notice.textContent =
+        `This site has no page “${parsed.page}”, so this is its home page. ` +
+        'The link may be for a different version of the site.'
+      ui.notice.className = 'notice'
+      ui.notice.hidden = false
+    }
   } catch (err) {
     stopJoining()
     fail(err)
@@ -438,9 +452,11 @@ async function open (ref) {
  * The message is shown verbatim rather than translated into something
  * reassuring: the whole value of it is that the reader can quote it back.
  */
-function watchForTrouble (torrent, ref) {
+function watchForTrouble (torrent) {
   const onError = err => {
-    if (current?.ref !== ref) return
+    // The torrent rather than the address: following a link inside the site
+    // changes the address, and the site is still the one that failed.
+    if (current?.torrent !== torrent) return
 
     const message = String(err?.message ?? err)
     console.error('Spore: the torrent failed after it was open:', err)
@@ -537,7 +553,65 @@ function showInViewer (infoHash, path, { scripts }) {
   return ui.viewer.showRelay(relayURL(infoHash, path, { scripts, sandbox: sandboxWorks() !== false }))
 }
 
-async function render (torrent, entry) {
+/**
+ * A page of this site, as a path in the torrent — or null if it has none.
+ *
+ * `page` came out of a link, so it is only ever looked up, never used to build
+ * a path: whatever it says, what gets opened is a file this torrent lists,
+ * inside the site's root, under the same sandbox and policy as its home page.
+ */
+function pageIn (torrent, entry, page) {
+  const path = siteRoot(entry) + page
+  return torrent.files.some(file => file.path.replace(/\\/g, '/') === path) ? path : null
+}
+
+/** The folder `index.html` is in, as a prefix: `''` or `'name/'`. */
+function siteRoot (entry) {
+  return entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : ''
+}
+
+/**
+ * The reader followed a link inside the site: keep the address on that page.
+ *
+ * So that what is in the address bar, the browser's URL and the Share link all
+ * name the page on screen, and passing on an article passes on the article.
+ * `replaceState` rather than a new fragment, which would reopen the site: the
+ * frame has already moved, and the browser has recorded that step in its own
+ * history, so Back walks the site's pages as it would anywhere else.
+ *
+ * `path` is URL-encoded and as the frame reported it — from a frame a site with
+ * scripts can control, in the isolated case — so it is checked against the
+ * torrent's file list before it names anything.
+ */
+function followPage (infoHash, path) {
+  if (!current || current.torrent.infoHash !== infoHash || !current.entry || typeof path !== 'string') return
+
+  let file
+  try { file = decodeURIComponent(path.split(/[?#]/)[0]) } catch { return }
+  // A link to a folder, `./` or `posts/`, is served its index.html.
+  if (file === '' || file.endsWith('/')) file += 'index.html'
+  const root = siteRoot(current.entry)
+  if (!file.startsWith(root) || !pageIn(current.torrent, current.entry, file.slice(root.length))) return
+
+  const page = file === current.entry ? null : file.slice(root.length)
+  if (page === current.page) return
+  current.page = page
+  current.ref = withPage(current.magnetURI, page)
+  history.replaceState(null, '', `#${current.ref}`)
+  ui.address.value = current.ref
+}
+
+function onViewerLoad (event) {
+  if (event.target !== ui.viewer.frame) return
+  let here = ''
+  try { here = ui.viewer.frame.contentDocument?.URL ?? '' } catch { return }
+  const prefix = new URL(`./${TORRENT_PATH}/`, document.baseURI).href
+  if (!here.startsWith(prefix)) return
+  const [infoHash, ...rest] = here.slice(prefix.length).split('/')
+  followPage(infoHash, rest.join('/'))
+}
+
+async function render (torrent, entry, page = null) {
   // Asked before anything is shown, not after. On an engine that cannot serve
   // a sandboxed frame the reader is accepting a real, if narrow, loss, and
   // showing them the site first would be presenting it as a formality.
@@ -555,7 +629,7 @@ async function render (torrent, entry) {
   ui.keepLabel.hidden = false
   ui.saveTorrent.hidden = false
   ui.shareOpen.hidden = false
-  const shown = showInViewer(torrent.infoHash, entry, { scripts: allowed })
+  const shown = showInViewer(torrent.infoHash, page ?? entry, { scripts: allowed })
   ui.welcome.hidden = true
   ui.notice.hidden = true
   ui.error.hidden = true
@@ -2487,7 +2561,9 @@ function showShareLink (magnet, justPublished = true) {
  */
 function onShare () {
   if (!current) return
-  showShareLink(current.torrent.magnetURI, false)
+  // The page on screen, not the site's home: that is what someone passing on
+  // a link means to pass on.
+  showShareLink(withPage(current.torrent.magnetURI, current.page), false)
   ui.shareLink.select()
 }
 

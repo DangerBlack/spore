@@ -427,6 +427,7 @@ async function run () {
   await checkMissingSiteAndHome(page)
   await checkKeptSiteSurvivesReload(page)
   await checkTorrentWithoutIndex(page)
+  await checkPagesInsideASite(page, infoHash)
   await checkSigningCore(page)
   await checkUpdateOverTheWire()
   await checkUpdateOffer()
@@ -3517,6 +3518,72 @@ async function checkTorrentWithoutIndex (page) {
 }
 
 /**
+ * A link can name a page inside a site, and the address follows the reader.
+ *
+ * `x.sp=<path>` in the magnet opens that page instead of index.html; following
+ * a link inside the site moves the address, the URL and the Share link onto the
+ * page on screen without reopening anything. A page the site does not have
+ * falls back to its home and says so; a path that could never be a page is
+ * refused. The fixture's home page links to about.html.
+ */
+async function checkPagesInsideASite (page, infoHash) {
+  const magnet = `magnet:?xt=urn:btih:${infoHash}`
+  const viewerSrc = () => page.$eval('#viewer', f => f.src)
+
+  await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=about.html`)
+  await page.waitForFunction(() => document.getElementById('viewer').src.endsWith('/about.html'), { timeout: 20_000 })
+    .catch(() => {})
+  const src = await viewerSrc()
+  check('a link naming a page opens that page, not the home page', src.endsWith('/about.html'), src)
+
+  await page.click('#share-open')
+  const shared = await page.$eval('#share-link', i => i.value)
+  check('Share passes on the page on screen', shared.includes('x.sp=about.html'), shared.slice(-60))
+  await page.$eval('#share', s => { s.hidden = true })
+
+  // Home, then along the site's own link.
+  await page.evaluate(h => { location.hash = h }, magnet)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  const home = await viewerSrc()
+  const steps = await page.evaluate(() => history.length)
+  await (await siteFrame(page)).evaluate(() => document.querySelector('a[href="about.html"]').click())
+  await page.waitForFunction(() => location.hash.includes('x.sp=about.html'), { timeout: 10_000 }).catch(() => {})
+  const followed = await page.evaluate(() => ({
+    hash: decodeURIComponent(location.hash),
+    address: document.getElementById('address').value
+  }))
+  check('following a link inside the site moves the address onto that page',
+    followed.hash.includes('x.sp=about.html') && followed.address.includes('x.sp=about.html'),
+    followed.hash.slice(-40))
+  // Reopening would point the frame's src at about.html; following leaves it.
+  await wait(1000)
+  check('and moves it without reopening the site', await viewerSrc() === home, await viewerSrc())
+  // One step, the frame's own. A second, the gate's, would make Back return the
+  // address to the home page while the frame stayed on the post.
+  const stepped = await page.evaluate(() => history.length)
+  check('and adds one step to the history, so Back walks the site\'s pages',
+    stepped === steps + 1, `${steps} → ${stepped}`)
+
+  await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=gone.html`)
+  await page.waitForFunction(() => !document.getElementById('notice').hidden, { timeout: 20_000 }).catch(() => {})
+  const missing = await page.evaluate(() => ({
+    src: document.getElementById('viewer').src,
+    notice: document.getElementById('notice').textContent
+  }))
+  check('a page the site does not have opens its home page, and says why',
+    /\/index\.html$/.test(missing.src) && missing.notice.includes('gone.html'), missing.notice.slice(0, 80))
+
+  await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=../../sw.js`)
+  await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 10_000 }).catch(() => {})
+  const refused = await page.$eval('#error', e => e.hidden ? '' : e.textContent)
+  check('a path that climbs out of the site is refused as a link, not followed',
+    refused.includes('not a page inside a site'), refused.trim().slice(0, 80))
+
+  await page.evaluate(() => { location.hash = '' })
+  await wait(500)
+}
+
+/**
  * A kept site survives a reload with nobody seeding it.
  *
  * The reported sequence: keep a site, close the tab that published it, reload.
@@ -3835,6 +3902,25 @@ async function runIsolated () {
     }, `/webtorrent/${infoHash}/%E0%A4`)
     check('isolation: a malformed path is refused at once, not left to time out',
       malformed.status === 400 && malformed.ms < 5000, JSON.stringify(malformed))
+
+    // --- a page inside the site: the relay tells the gate where the reader is --
+    await (await siteFrame(page)).evaluate(() => document.querySelector('a[href="about.html"]').click())
+    await page.waitForFunction(() => location.hash.includes('x.sp=about.html'), { timeout: 10_000 }).catch(() => {})
+    const followed = await page.evaluate(() => decodeURIComponent(location.hash))
+    check('isolation: following a link inside the site moves the address onto that page',
+      followed.includes('x.sp=about.html'), followed.slice(-40))
+
+    await page.evaluate(h => { location.hash = h }, `magnet:?xt=urn:btih:${infoHash}&x.sp=about.html`)
+    await page.waitForFunction(() => document.getElementById('viewer').src.includes('about.html'), { timeout: 20_000 })
+      .catch(() => {})
+    const named = await page.$eval('#viewer', f => new URL(f.src).searchParams.get('path'))
+    check('isolation: a link naming a page opens that page through the relay',
+      named?.endsWith('/about.html') ?? false, named)
+
+    await page.evaluate(h => { location.hash = h }, infoHash)
+    await page.waitForFunction(() => /index\.html/.test(new URL(document.getElementById('viewer').src).searchParams.get('path') ?? ''),
+      { timeout: 20_000 })
+    await siteFrame(page)
 
     // --- scripts on: the boundary this whole mode exists for -----------------
     asked.length = 0
