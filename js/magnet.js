@@ -134,7 +134,8 @@ function infoHashFromMagnet (magnetURI) {
  */
 function pageFromMagnet (magnetURI) {
   const match = new RegExp(`[?&]${PAGE_PARAM.replace('.', '\\.')}=([^&]*)`, 'i').exec(magnetURI)
-  if (!match || match[1] === '') return null
+  if (!match) return null
+  if (match[1] === '') throw new InvalidSiteRef(`This link names an empty page (“${PAGE_PARAM}=”).`)
 
   let page = match[1]
   try { page = decodeURIComponent(page) } catch { /* already decoded */ }
@@ -150,8 +151,23 @@ function pageFromMagnet (magnetURI) {
  */
 function fragmentOf (url) {
   try {
-    return decodeURIComponent(new URL(url).hash.replace(/^#/, ''))
+    return decodeFragment(new URL(url).hash.replace(/^#/, ''))
   } catch {
     throw new InvalidSiteRef('That URL could not be read.')
   }
+}
+
+/**
+ * A fragment as the reference it holds: undoing what the browser escaped, one
+ * parameter at a time, with the page left as it was written.
+ *
+ * Decoding the whole fragment at once, as this used to, turned a page called
+ * `a%26b.html` into `a&b.html` before anything read it, and the `&` then
+ * ended the parameter: the link opened the home page. Split first, so an
+ * escaped `&` stays inside its value; the page is decoded once, later, by
+ * `pageFromMagnet`, like a page pasted into the address bar.
+ */
+export function decodeFragment (fragment) {
+  return fragment.split('&').map(pair =>
+    pair.toLowerCase().startsWith(`${PAGE_PARAM}=`) ? pair : decodeURIComponent(pair)).join('&')
 }
