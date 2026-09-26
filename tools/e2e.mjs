@@ -3528,6 +3528,8 @@ async function checkTorrentWithoutIndex (page) {
  */
 async function checkPagesInsideASite (page, infoHash) {
   const magnet = `magnet:?xt=urn:btih:${infoHash}`
+  const { parseSiteRef } = await import('../js/magnet.js')
+  const parse = link => { try { return parseSiteRef(link).page } catch (err) { return err.message } }
   const viewerSrc = () => page.$eval('#viewer', f => f.src)
 
   await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=about.html`)
@@ -3540,6 +3542,19 @@ async function checkPagesInsideASite (page, infoHash) {
   const shared = await page.$eval('#share-link', i => i.value)
   check('Share passes on the page on screen', shared.includes('x.sp=about.html'), shared.slice(-60))
   await page.$eval('#share', s => { s.hidden = true })
+
+  // Scripts are on for this site from earlier. Turning them off and on again
+  // reloads the page on screen, not the home page.
+  const kept = []
+  for (let flip = 0; flip < 2; flip++) {
+    await page.click('#scripts-toggle')
+    await wait(1500)
+    kept.push(await viewerSrc())
+  }
+  const stayed = await page.evaluate(() => decodeURIComponent(location.hash))
+  check('changing the scripts setting keeps the reader on the page they were reading',
+    kept.every(src => src.endsWith('/about.html')) && stayed.includes('x.sp=about.html'),
+    kept.map(src => src.split('/').pop()).join(', '))
 
   // Home, then along the site's own link.
   await page.evaluate(h => { location.hash = h }, magnet)
@@ -3572,6 +3587,37 @@ async function checkPagesInsideASite (page, infoHash) {
   }))
   check('a page the site does not have opens its home page, and says why',
     /\/index\.html$/.test(missing.src) && missing.notice.includes('gone.html'), missing.notice.slice(0, 80))
+
+  await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=`)
+  await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 10_000 }).catch(() => {})
+  const empty = await page.$eval('#error', e => e.hidden ? '' : e.textContent)
+  check('an empty page in a link is refused, not taken for the home page',
+    empty.includes('empty page'), empty.trim().slice(0, 80))
+
+  // A page whose name holds an escaped `&`, which must not end the parameter.
+  const ampersand = await page.evaluate(async () => {
+    const index = new File(['<h1>home</h1><a href="a%26b.html">on</a>'], 'index.html', { type: 'text/html' })
+    const other = new File(['<h1>a and b</h1>'], 'a&b.html', { type: 'text/html' })
+    index.fullPath = 'amp/index.html'
+    other.fullPath = 'amp/a&b.html'
+    const { seedTorrent } = await import('/js/swarm.js')
+    return (await seedTorrent([index, other], { name: 'amp' })).infoHash
+  })
+  await page.evaluate(h => { location.hash = h }, `magnet:?xt=urn:btih:${ampersand}&x.sp=a%26b.html`)
+  await page.waitForFunction(() => document.getElementById('viewer').src.endsWith('/a%26b.html'), { timeout: 20_000 })
+    .catch(() => {})
+  const escaped = await viewerSrc()
+  check('a page with an escaped & in its name opens that page', escaped.endsWith('/a%26b.html'), escaped.split('/').pop())
+
+  await page.evaluate(h => { location.hash = h }, `magnet:?xt=urn:btih:${ampersand}`)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  await (await siteFrame(page)).evaluate(() => document.querySelector('a').click())
+  await page.waitForFunction(() => location.hash.includes('x.sp=a%26b.html'), { timeout: 10_000 }).catch(() => {})
+  await page.click('#share-open')
+  const sharedAmp = await page.$eval('#share-link', i => i.value)
+  await page.$eval('#share', s => { s.hidden = true })
+  check('and following a link to it gives a link that opens it again',
+    parse(sharedAmp) === 'a&b.html', sharedAmp.slice(-30))
 
   await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=../../sw.js`)
   await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 10_000 }).catch(() => {})
@@ -3916,6 +3962,31 @@ async function runIsolated () {
     const named = await page.$eval('#viewer', f => new URL(f.src).searchParams.get('path'))
     check('isolation: a link naming a page opens that page through the relay',
       named?.endsWith('/about.html') ?? false, named)
+
+    // What Share says from the link alone, before any page report: a second
+    // reader whose gate never hears one. Its message listeners are wrapped
+    // before the gate's code runs; this page stays open, as the seed.
+    const held = await browser.newPage()
+    try {
+      await held.evaluateOnNewDocument(() => {
+        const add = EventTarget.prototype.addEventListener
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+          const wrapped = this === window && type === 'message' && typeof listener === 'function'
+            ? function (event) { if (event.data?.spore !== 'relay/page') return listener.call(this, event) }
+            : listener
+          return add.call(this, type, wrapped, options)
+        }
+      })
+      await held.goto(`${gate}/#magnet:?xt=urn:btih:${infoHash}&tr=${encodeURIComponent(trackerURL)}&x.sp=about.html`,
+        { waitUntil: 'load' })
+      await siteFrame(held)
+      await held.click('#share-open')
+      const sharedEarly = await held.$eval('#share-link', i => i.value)
+      check('isolation: Share names the linked page before the relay has reported it',
+        sharedEarly.includes('x.sp=about.html'), sharedEarly.slice(-40))
+    } finally {
+      await held.close()
+    }
 
     await page.evaluate(h => { location.hash = h }, infoHash)
     await page.waitForFunction(() => /index\.html/.test(new URL(document.getElementById('viewer').src).searchParams.get('path') ?? ''),

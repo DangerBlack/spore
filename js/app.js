@@ -13,7 +13,7 @@ import { TORRENT_PATH, VERIFY_WITHOUT_ASKING_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
-import { InvalidSiteRef, magnetFor, parseSiteRef, webSeedHosts, withPage } from './magnet.js'
+import { InvalidSiteRef, decodeFragment, magnetFor, parseSiteRef, webSeedHosts, withPage } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
   checkPublishable, filesFromDrop, filesFromInput, filesFromPicker, publish
@@ -325,7 +325,7 @@ async function boot () {
 /* -------------------------------------------------------------------------- */
 
 function currentRef () {
-  return decodeURIComponent(location.hash.replace(/^#/, ''))
+  return decodeFragment(location.hash.replace(/^#/, ''))
 }
 
 /** Navigate by rewriting the fragment; `route` does the work on the way back. */
@@ -426,6 +426,8 @@ async function open (ref) {
     if (!entry) { showListing(torrent); nameAuthor(torrent, null); return }
 
     const page = parsed.page ? pageIn(torrent, entry, parsed.page) : null
+    // Set now, not when the frame reports: Share is on screen before it does.
+    current.page = page ? parsed.page : null
     await render(torrent, entry, page)
     if (parsed.page && !page) {
       ui.notice.textContent =
@@ -1741,8 +1743,11 @@ async function onScriptsToggle () {
 
   setScriptsAllowed(torrent.infoHash, ui.scripts.checked)
 
+  // The page on screen, reloaded under the new policy — not the home page,
+  // which would also move the address and Share back to it.
   const entry = findEntry(torrent)
-  const shown = await showInViewer(torrent.infoHash, entry, { scripts: ui.scripts.checked })
+  const page = current.page ? siteRoot(entry) + current.page : entry
+  const shown = await showInViewer(torrent.infoHash, page, { scripts: ui.scripts.checked })
   if (!shown) warnViewerStuck()
 }
 
