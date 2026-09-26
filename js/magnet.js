@@ -4,6 +4,15 @@
  * Accepts a magnet URI, a bare infohash (40 hex or 32 base32 chars), or a full
  * gate URL whose fragment holds either of those — so a link copied out of
  * another mirror can be pasted straight into the address bar.
+ *
+ * ## A page inside a site
+ *
+ * A magnet names a torrent, not a file in it, and BitTorrent has no standard
+ * field for one: BEP 53's `so=` picks files by index, which a republish
+ * reshuffles. So Spore adds its own, `x.sp=<path>`, the path of a page
+ * relative to the site's root (where `index.html` is). `x.` is the prefix
+ * BEP 9 sets aside for extensions, and other clients ignore it. The link names
+ * no gate, so it opens on whichever gate the reader trusts.
  */
 
 import { DEFAULT_TRACKERS } from './config.js'
@@ -11,13 +20,18 @@ import { DEFAULT_TRACKERS } from './config.js'
 const HEX_INFOHASH = /^[0-9a-f]{40}$/i
 const BASE32_INFOHASH = /^[a-z2-7]{32}$/i
 
+/** The magnet parameter naming a page inside the site. See above. */
+export const PAGE_PARAM = 'x.sp'
+
 export class InvalidSiteRef extends Error {}
 
 /**
  * @param {string} input
- * @returns {{ magnetURI: string, infoHash: string|null, source: string }}
+ * @returns {{ magnetURI: string, infoHash: string|null, page: string|null, source: string }}
  *   `infoHash` is null when the reference is a magnet we cannot read a v1
- *   infohash out of; the real one is known once metadata arrives.
+ *   infohash out of; the real one is known once metadata arrives. `page` is
+ *   the site-relative path from `x.sp`, and `magnetURI` comes without it:
+ *   the torrent is the same whichever page is asked for.
  */
 export function parseSiteRef (input) {
   const raw = String(input ?? '').trim()
@@ -28,17 +42,30 @@ export function parseSiteRef (input) {
     : raw
 
   if (ref.startsWith('magnet:')) {
-    return { magnetURI: ref, infoHash: infoHashFromMagnet(ref), source: ref }
+    return { magnetURI: withPage(ref, null), infoHash: infoHashFromMagnet(ref), page: pageFromMagnet(ref), source: ref }
   }
   if (HEX_INFOHASH.test(ref)) {
     const infoHash = ref.toLowerCase()
-    return { magnetURI: magnetFor(infoHash), infoHash, source: ref }
+    return { magnetURI: magnetFor(infoHash), infoHash, page: null, source: ref }
   }
   if (BASE32_INFOHASH.test(ref)) {
     // WebTorrent decodes base32 itself; we just cannot name the hash yet.
-    return { magnetURI: magnetFor(ref.toUpperCase()), infoHash: null, source: ref }
+    return { magnetURI: magnetFor(ref.toUpperCase()), infoHash: null, page: null, source: ref }
   }
   throw new InvalidSiteRef('That is not a magnet link or an infohash.')
+}
+
+/**
+ * The same magnet, pointing at `page` — or at the site's home, for null.
+ *
+ * Any page it named before is replaced, not added to: two `x.sp` would leave
+ * the reader's gate to guess.
+ */
+export function withPage (magnetURI, page) {
+  const [head, query = ''] = magnetURI.split('?')
+  const kept = query.split('&').filter(pair => pair && !pair.toLowerCase().startsWith(`${PAGE_PARAM}=`))
+  if (page) kept.push(`${PAGE_PARAM}=${page.split('/').map(encodeURIComponent).join('/')}`)
+  return `${head}?${kept.join('&')}`
 }
 
 /**
@@ -92,6 +119,29 @@ function infoHashFromMagnet (magnetURI) {
   throw new InvalidSiteRef(
     `“${value}” is not a valid infohash: it should be 40 characters of 0-9 and ` +
     'a-f, or 32 of base32. Check the link for a typo or a missing character.')
+}
+
+/**
+ * The page a magnet asks for, validated, or null for the site's home.
+ *
+ * The value comes from whoever wrote the link, so it is held to the shape of a
+ * path inside a site: no `..`, no empty or `.` segments, nothing absolute.
+ * That is a courtesy rather than the defence — the gate only ever opens a page
+ * that is in the torrent's own file list — but a link that could never work
+ * should say so rather than quietly show the home page.
+ *
+ * @throws {InvalidSiteRef}
+ */
+function pageFromMagnet (magnetURI) {
+  const match = new RegExp(`[?&]${PAGE_PARAM.replace('.', '\\.')}=([^&]*)`, 'i').exec(magnetURI)
+  if (!match || match[1] === '') return null
+
+  let page = match[1]
+  try { page = decodeURIComponent(page) } catch { /* already decoded */ }
+  if (page.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+    throw new InvalidSiteRef(`“${page}” is not a page inside a site: it should be a path like posts/hello.html.`)
+  }
+  return page
 }
 
 /**

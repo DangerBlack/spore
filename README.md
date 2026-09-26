@@ -162,6 +162,26 @@ a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.
 
+### Linking to a page
+
+A link can open a page other than the home page — a new post, say. Add
+`x.sp=<path>` to the magnet, where the path is relative to the site's root
+(where `index.html` is):
+
+```
+https://any-gate/#magnet:?xt=urn:btih:<infohash>&dn=blog&tr=…&x.sp=posts/new-post.html
+```
+
+You rarely need to write one by hand. As you follow links inside a site, the
+address bar keeps up with the page you are on, and **Share** hands over a link
+to that page rather than to the home page.
+
+`x.` is the prefix BitTorrent sets aside for extensions, so other clients
+ignore the parameter, and the link names no gate: it opens the same page on any
+mirror. The page has to be one of the site's own files. A link to a page the
+site does not have opens its home page and says so, and a path that climbs out
+of the site (`..`) is refused.
+
 ## Updating a site
 
 A magnet is the hash of its content, so editing a site gives it a new address.

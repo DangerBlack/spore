@@ -11,7 +11,8 @@
  *  3. frames the site from this origin, which is what puts the browser's
  *     origin boundary between the site and Spore;
  *  4. tells the gate whether the site actually arrived, since the gate cannot
- *     look inside a frame from another origin.
+ *     look inside a frame from another origin — and, as the reader follows
+ *     links, which page of it is on screen.
  *
  * It is a separate document from the site so the site's HTML never has to be
  * rewritten to carry any of this. It is *not* a security boundary: a site with
@@ -175,7 +176,14 @@ function show (src, { scripts, sandbox }) {
     // real navigation has happened; that one says nothing about the site.
     let here = ''
     try { here = frame.contentDocument?.URL ?? '' } catch {}
-    if (here !== 'about:blank') report()
+    if (here === 'about:blank') return
+    report()
+    // Every load, the first included: the gate keeps its address bar on the
+    // page on screen. Only a path is sent, and the gate checks it against the
+    // torrent's own file list, so a site that lies here names another of its
+    // own pages and nothing else.
+    const prefix = new URL(`./${TORRENT_PATH}/${location.hostname.split('.')[0]}/`, location.href).href
+    if (here.startsWith(prefix)) parent.postMessage({ spore: RELAY.page, path: here.slice(prefix.length) }, isolation.gate)
   })
 
   frame.src = src
