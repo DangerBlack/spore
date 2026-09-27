@@ -3766,10 +3766,10 @@ async function checkSiteDataBlocked () {
  */
 async function checkOtherWorkerRefusals () {
   let early = null
-  const attempt = async (alter, then) => {
+  const attempt = async (alter, then, arg) => {
     const page = await browser.createBrowserContext().then(c => c.newPage())
     try {
-      await page.evaluateOnNewDocument(alter)
+      await page.evaluateOnNewDocument(alter, arg)
       await page.goto(origin + '/', { waitUntil: 'load' })
       if (then) await then(page)
       await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 15_000 }).catch(() => {})
@@ -3793,7 +3793,22 @@ async function checkOtherWorkerRefusals () {
   check('a refusal that is not about site data says so, with the browser\'s reason',
     other.title === 'Spore could not start' && other.detail.includes('failed to load'), `${other.title} — ${other.detail.slice(0, 80)}`)
 
+  // Worded exactly like Chrome's site-data refusal, and as Firefox names one,
+  // with storage working: it is not about site data, whatever it says, and
+  // the reader must not be sent to change a setting that cannot help.
+  for (const [label, name] of [['Chrome', 'NotSupportedError'], ['Firefox', 'SecurityError']]) {
+    const lookalike = await attempt(name => {
+      ServiceWorkerContainer.prototype.register = () =>
+        Promise.reject(new DOMException('The user denied permission to use Service Worker.', name))
+    }, undefined, name)
+    check(`a ${label}-shaped refusal with storage working is not called blocked site data`,
+      lookalike.title === 'Spore could not start', lookalike.title)
+  }
+
   const raced = await attempt(() => {
+    // Site data blocked, as the browser would have it: storage refused, and
+    // the worker refused two seconds later.
+    Storage.prototype.setItem = () => { throw new DOMException('Access is denied for this document.', 'SecurityError') }
     ServiceWorkerContainer.prototype.register = () => new Promise((resolve, reject) => setTimeout(() =>
       reject(new DOMException('The user denied permission to use Service Worker.', 'NotSupportedError')), 2000))
   }, async page => {
