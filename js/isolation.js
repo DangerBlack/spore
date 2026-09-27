@@ -157,7 +157,7 @@ export function relayURL (infoHash, path, { scripts, sandbox }) {
  * @param {string} options.scope   the gate worker's registration scope
  * @param {() => (Window|null)} options.frame  the viewer frame's window, now
  * @param {(infoHash: string, report: object) => void} options.onShown
- * @param {(infoHash: string, path: unknown) => void} options.onPage
+ * @param {(infoHash: string, report: object) => void} options.onPage
  */
 export function answerRelays ({ server, scope, frame, onShown, onPage }) {
   if (!isolation) return
@@ -183,7 +183,7 @@ export function answerRelays ({ server, scope, frame, onShown, onPage }) {
       return
     }
     if (kind === RELAY.page) {
-      onPage(infoHash, event.data.path)
+      onPage(infoHash, event.data)
       return
     }
     if (port) relayRequest(server, scope, infoHash, event.data.request, port)
