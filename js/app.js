@@ -34,7 +34,7 @@ import {
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
-import { SiteNotFound, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
+import { SiteNotFound, WorkerRefused, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
 import {
   answerRelays, contentOrigin, infoHashOf, isSiteHostname, isolation, isolationProblem, relayURL
 } from './isolation.js'
@@ -172,6 +172,12 @@ let current = null
 let statsTimer = null
 /** True once the swarm client exists; until then there is nothing to publish to. */
 let ready = false
+/**
+ * Why this gate cannot run in this browser, once that is known — and then it
+ * is the answer to everything: opening, pasting, publishing. See WorkerRefused.
+ * @type {WorkerRefused|null}
+ */
+let cannotRun = null
 
 // Declared here, with the rest of the module state, rather than beside the
 // function that reads them. `boot()` runs while this module is still being
@@ -298,6 +304,7 @@ async function boot () {
     if (!isolation) document.addEventListener('load', onViewerLoad, true)
     if (isolation) watchForRefusedFrames()
   } catch (err) {
+    if (err instanceof WorkerRefused) cannotRun = err
     return fail(err)
   }
   ready = true
@@ -383,6 +390,7 @@ let opening = null
  * generic error instead of the site, or instead of an honest 404.
  */
 async function route () {
+  if (cannotRun) return fail(cannotRun)
   const ref = currentRef()
   if (!ref) return showWelcome()
   if (current?.ref === ref || opening === ref) return
@@ -2233,6 +2241,7 @@ function wireDropTarget () {
 }
 
 async function seed (files, name) {
+  if (cannotRun) return fail(cannotRun)
   if (!ready) {
     return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
   }
@@ -2768,6 +2777,8 @@ function fail (error) {
   ui.errorRef.textContent = currentRef() || ''
   ui.errorRef.parentElement.hidden = !currentRef()
   ui.errorRetry.hidden = !retry
+  // "Publish a site instead" leads back here when nothing can run at all.
+  ui.errorHome.hidden = error instanceof WorkerRefused
 
   ui.error.hidden = false
   ui.notice.hidden = true
@@ -2815,6 +2826,7 @@ function describe (error) {
       retry: false
     }
   }
+  if (error instanceof WorkerRefused) return describeRefusal(error)
   if (error instanceof PublishFailed) {
     return {
       code: ':(',
@@ -2828,6 +2840,45 @@ function describe (error) {
     title: 'This site could not be opened',
     detail: error instanceof Error ? error.message : String(error),
     retry: true
+  }
+}
+
+/**
+ * The page for a browser that will not run Spore's worker. It names this
+ * gate's own host — the setting is per site, and it used to say "localhost"
+ * to readers on a real domain — and says what to change, not what broke.
+ */
+function describeRefusal (error) {
+  const host = location.hostname
+  if (error.kind === 'blocked') {
+    return {
+      code: ':(',
+      title: 'This browser is blocking what Spore needs',
+      detail:
+        `This browser is set to block cookies and site data for ${host}, and that ` +
+        'also switches off service workers, which are how Spore shows a site at all. ' +
+        `Allow site data for ${host} and reload the page. In Chrome, that is the icon ` +
+        'to the left of the address, then Site settings; in Firefox, Settings › Privacy ' +
+        '› Cookies and Site Data › Manage Exceptions.',
+      retry: false
+    }
+  }
+  if (error.kind === 'unavailable') {
+    return {
+      code: ':(',
+      title: 'Spore cannot run here',
+      detail:
+        'This browser offers no service workers on this page, and Spore needs one to ' +
+        'show a site. They need HTTPS (localhost is the exception), and some browsers ' +
+        'turn them off in private windows.',
+      retry: false
+    }
+  }
+  return {
+    code: ':(',
+    title: 'Spore could not start',
+    detail: `The browser would not start Spore's service worker: ${error.message}`,
+    retry: false
   }
 }
 

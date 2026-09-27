@@ -442,6 +442,7 @@ async function run () {
   await checkAnArchiveWithTooManyFiles()
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
+  await checkSiteDataBlocked()
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
   await checkMissingSiteAndHome(page)
@@ -3682,6 +3683,73 @@ async function checkPagesInsideASite (page, infoHash) {
  */
 async function closeContexts (...pages) {
   for (const page of pages) await page.browserContext().close().catch(() => {})
+}
+
+/**
+ * A browser set to block cookies and site data, which also turns off service
+ * workers. Reported from the first launch as "The swarm client has not been
+ * started": the same setting read three different ways depending on where
+ * the reader clicked. Every way in now gets one page, naming this host and
+ * what to change, and none of them offers a way on that cannot work.
+ *
+ * Needs its own browser: blocking site data is a profile setting.
+ */
+async function checkSiteDataBlocked () {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const profile = await mkdtemp(join(tmpdir(), 'spore-blocked-'))
+  await mkdir(join(profile, 'Default'))
+  await writeFile(join(profile, 'Default', 'Preferences'),
+    JSON.stringify({ profile: { default_content_setting_values: { cookies: 2 } } }))
+
+  const blocked = await puppeteer.launch({
+    executablePath: CHROME, headless: 'new', userDataDir: profile, protocolTimeout: 60_000,
+    args: ['--no-sandbox', '--disable-dev-shm-usage']
+  })
+  try {
+    const page = await blocked.newPage()
+    const shown = () => page.evaluate(() => ({
+      title: document.getElementById('error').hidden ? null : document.getElementById('error-title').textContent,
+      detail: document.getElementById('error-detail').textContent,
+      publishInstead: !document.getElementById('error-home').hidden
+    }))
+
+    await page.goto(origin + '/', { waitUntil: 'load' })
+    await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 30_000 }).catch(() => {})
+    const opened = await shown()
+    check('a browser blocking site data is told so, naming this host and what to change',
+      opened.title === 'This browser is blocking what Spore needs' &&
+      opened.detail.includes('site data for localhost') && opened.detail.includes('reload'),
+      `${opened.title} — ${opened.detail.slice(0, 70)}`)
+    check('and is not offered a way on that cannot work', !opened.publishInstead)
+
+    await page.evaluate(() => {
+      const address = document.getElementById('address')
+      address.value = 'magnet:?xt=urn:btih:' + 'a'.repeat(40)
+      address.form.requestSubmit()
+    })
+    await wait(1500)
+    const pasted = await shown()
+    check('pasting a magnet there says the same, not "the swarm client has not been started"',
+      pasted.title === 'This browser is blocking what Spore needs', pasted.title ?? pasted.detail)
+
+    await page.evaluate(() => {
+      history.pushState(null, '', location.pathname)
+      const data = new DataTransfer()
+      data.items.add(new File(['<h1>hi</h1>'], 'index.html', { type: 'text/html' }))
+      const input = document.getElementById('files-input')
+      input.files = data.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await wait(1500)
+    const published = await shown()
+    check('and so does publishing, not "still starting up, try again in a moment"',
+      published.title === 'This browser is blocking what Spore needs', published.title ?? published.detail)
+  } finally {
+    await blocked.close()
+    await rm(profile, { recursive: true, force: true })
+  }
 }
 
 /** A site whose links go everywhere a link can go, seeded from `page`. */
