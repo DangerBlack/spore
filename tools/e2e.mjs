@@ -3660,11 +3660,17 @@ async function seedLinkSite (page) {
       <p><svg width="120" height="24"><a id="svgout" href="https://example.org/svg"><text x="0" y="16">svg link</text></a></svg></p>
       <p><a id="hexfrag" href="https://example.org/commit#${'a'.repeat(40)}">a commit</a></p>
       <p><a id="routed" href="https://example.org/routed">handled by the site</a></p>
+      <p><a id="late" href="https://example.org/late">handled by a handler added later</a></p>
+      <p><a id="gateenc" href="https://another-gate.example/#magnet%3A?xt=urn:btih:${viaGate}&dn=Encoded">escaped gate link</a></p>
       <script>
         // A site's own router, on the window, as a single-page app would have it.
         addEventListener('click', e => {
           if (e.target.closest('#routed')) { e.preventDefault(); document.title = 'routed' }
         })
+        // And one that arrives after the page has loaded, as after a fetch.
+        addEventListener('load', () => setTimeout(() => addEventListener('click', e => {
+          if (e.target.closest('#late')) { e.preventDefault(); document.title = 'late' }
+        }), 200))
       </script>`], 'index.html', { type: 'text/html' })
     const two = new File(['<h1>two</h1>'], 'two.html', { type: 'text/html' })
     index.fullPath = 'links/index.html'
@@ -3768,6 +3774,14 @@ async function checkLinksOutOfASite (page) {
     svg?.leave?.href === 'https://example.org/svg', JSON.stringify(svg?.leave ?? null))
   await page.click('#link-stay').catch(() => {})
 
+  // A gate URL whose fragment is escaped is still a gate URL.
+  await site.click('#gateenc')
+  await wait(300)
+  const escapedGate = await linkDialog(page)
+  check('a gate link with an escaped fragment is still a Spore link',
+    escapedGate?.title === 'Open another Spore site?' && escapedGate.what.includes('Encoded'), escapedGate?.title)
+  await page.click('#link-stay').catch(() => {})
+
   // A web address whose fragment merely looks like an infohash is the web.
   await page.evaluate(() => { location.hash = '' })
   await wait(500)
@@ -3796,6 +3810,14 @@ async function checkLinksOutOfASite (page) {
   const routed = { dialog: await linkDialog(page), title: await site.evaluate(() => document.title) }
   check('a link the site\'s own script handles, even on the window, is left to it',
     routed.dialog === null && routed.title === 'routed', JSON.stringify(routed).slice(0, 100))
+
+  await wait(500)
+  await site.click('#late')
+  await wait(300)
+  const late = { dialog: await linkDialog(page), title: await site.evaluate(() => document.title) }
+  check('and so is one whose handler the site added after the page had loaded',
+    late.dialog === null && late.title === 'late', JSON.stringify(late).slice(0, 100))
+  await page.click('#link-stay').catch(() => {})
 
   await page.evaluate(() => { location.hash = '' })
   await wait(500)
