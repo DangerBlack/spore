@@ -1944,19 +1944,30 @@ async function onKeepToggle () {
     return
   }
 
+  // Keeping a large site can take minutes, and the reader may open another
+  // site meanwhile. The keeping goes on — it was asked for — but what it
+  // says, and how it fails, belongs to the site it is keeping: it must not
+  // write over another site's status bar, or replace another site with an
+  // error page.
+  const onScreen = () => current?.torrent === torrent
   ui.keep.disabled = true
   keeping = torrent
   try {
     await keep(torrent, (done, total, phase) => {
+      if (!onScreen()) return
       ui.progress.textContent = `${phase === 'fetching' ? 'fetching to keep' : 'keeping'} ${Math.round((done / total) * 100)}%`
     })
     await refreshKeptList()
   } catch (err) {
-    ui.keep.checked = false
-    fail(err)
+    if (onScreen()) {
+      ui.keep.checked = false
+      fail(err)
+    } else {
+      console.warn(`Spore: keeping ${torrent.name ?? torrent.infoHash} failed after it was left:`, err)
+    }
   } finally {
     keeping = null
-    ui.keep.disabled = false
+    if (onScreen()) ui.keep.disabled = false
   }
 }
 

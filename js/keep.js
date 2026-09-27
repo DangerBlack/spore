@@ -60,11 +60,16 @@ export function keptSites () {
 }
 
 /**
- * Copy a torrent that is already loaded into IndexedDB, and record enough
- * metadata to bring it back with no peer to ask.
+ * Copy a torrent into IndexedDB, and record enough metadata to bring it back
+ * with no peer to ask.
  *
- * @param {import('webtorrent').Torrent} torrent  must be complete
- * @param {(done: number, total: number) => void} [onProgress]
+ * The torrent need not be complete: a site fetched as it is read is fetched
+ * whole first (see fetchWhole), and only then stored. Ask whyNotKeep before
+ * calling this for one that is not.
+ *
+ * @param {import('webtorrent').Torrent} torrent  complete, or completed here first
+ * @param {(done: number, total: number, phase: 'fetching'|'writing') => void} [onProgress]
+ *   `fetching` while the rest of the site arrives, then `writing` as it is stored
  */
 export async function keep (torrent, onProgress = () => {}) {
   // Keeping is asking for all of it. A site fetched as it is read has only
@@ -84,7 +89,7 @@ export async function keep (torrent, onProgress = () => {}) {
       data: await readPiece(torrent, index)
     })))
     await putChunks(torrent.infoHash, batch)
-    onProgress(Math.min(start + BATCH, total), total)
+    onProgress(Math.min(start + BATCH, total), total, 'writing')
   }
 
   // Written last, so a record only ever exists for a site whose bytes are all
