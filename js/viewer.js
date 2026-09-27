@@ -149,8 +149,27 @@ export function linkLeaving (event, own) {
     return null
   }
   const modified = event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
-  const spore = url.protocol === 'magnet:' || /^#magnet(?::|%3a)/i.test(url.hash)
-  return modified && !spore ? null : url.href
+  return modified && !isSporeLink(url) ? null : url.href
+}
+
+/**
+ * Does this address name a Spore site? A `magnet:`, or a web address whose
+ * fragment is one — what every gate's Share produces — escaped or not.
+ *
+ * One answer for both places that ask: `linkLeaving`, deciding whether a
+ * modified click is the browser's, and the gate, deciding which dialog to
+ * show. Two copies disagreed about a fragment escaped letter by letter.
+ * The first parameter is decoded the way the address bar decodes it. A bare
+ * 40-hex fragment is also a git commit, and 32 letters can be an ordinary
+ * anchor: those are the web.
+ */
+export function isSporeLink (url) {
+  if (url.protocol === 'magnet:') return true
+  try {
+    return decodeURIComponent(url.hash.slice(1).split('&')[0]).startsWith('magnet:')
+  } catch {
+    return false
+  }
 }
 
 /**

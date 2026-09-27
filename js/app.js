@@ -42,7 +42,7 @@ import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
 } from './authors.js'
-import { Viewer, linkLeaving, listenLast, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
+import { Viewer, isSporeLink, linkLeaving, listenLast, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
 
 const el = id => document.getElementById(id)
 
@@ -685,14 +685,9 @@ function offerLink (href) {
   let url
   try { url = new URL(href) } catch { return }
 
-  // A web address counts as a Spore link only when its fragment is a magnet —
-  // what every gate's Share produces, escaped or not. A bare 40-hex fragment
-  // is also a git commit, and 32 letters can be an ordinary anchor: those are
-  // the web, whatever the address bar would make of them pasted in.
-  let fragment = ''
-  try { fragment = decodeFragment(url.hash.slice(1)) } catch {}
+  // Which addresses are Spore sites is decided in one place; see isSporeLink.
   let site = null
-  if (url.protocol === 'magnet:' || fragment.startsWith('magnet:')) {
+  if (isSporeLink(url)) {
     try { site = parseSiteRef(url.href) } catch { site = null }
   }
   if (site) return askToOpenSite(url, site)
