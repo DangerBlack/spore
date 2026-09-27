@@ -124,6 +124,19 @@ export const GATE_VERSION = '2026-09-27.2'
 export const VERIFY_WITHOUT_ASKING_BYTES = 256_000_000
 
 /**
+ * The largest site a reader downloads whole just by opening it.
+ *
+ * Up to this, opening a site fetches all of it, as it always has: every reader
+ * becomes a complete copy, which is what makes a site outlive its publisher's
+ * tab. Above it, a reader fetches only what they read — the page, its images,
+ * the pages they follow — so a large site, an archive or a wiki split into
+ * many files, costs what is looked at rather than what exists. Such a reader
+ * seeds only the pieces they have, so a large site still needs somebody
+ * holding all of it: its publisher, a seeder, or a reader who keeps it.
+ */
+export const WHOLE_SITE_BYTES = 50_000_000
+
+/**
  * What a .zip may be.
  *
  * There is no limit on how large a published site may be, and there must not

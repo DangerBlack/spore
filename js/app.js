@@ -34,7 +34,7 @@ import {
 import {
   asSite, dropJunk, entryFor, entryURL, filePaths, findEntry, pathOf, readManifest, readSporePub
 } from './site.js'
-import { SiteNotFound, WorkerRefused, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
+import { SiteNotFound, WorkerRefused, fetchedAsRead, getClient, getServer, openTorrent, startClient, startWorker } from './swarm.js'
 import {
   answerRelays, contentOrigin, infoHashOf, isSiteHostname, isolation, isolationProblem, relayURL
 } from './isolation.js'
@@ -2914,9 +2914,13 @@ function watchStats (torrent) {
   stopStats()
   const tick = () => {
     ui.peers.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? '' : 's'}`
+    // A large site is fetched only as it is read, so a percentage would sit at
+    // 3% looking stuck; it says what it is doing instead.
     ui.progress.textContent = torrent.done
       ? `${formatBytes(torrent.length)} · seeding`
-      : `${Math.round(torrent.progress * 100)}% of ${formatBytes(torrent.length)}`
+      : fetchedAsRead(torrent)
+        ? `${formatBytes(torrent.downloaded)} of ${formatBytes(torrent.length)} · fetched as you read`
+        : `${Math.round(torrent.progress * 100)}% of ${formatBytes(torrent.length)}`
   }
   tick()
   statsTimer = setInterval(tick, 1000)

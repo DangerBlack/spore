@@ -162,6 +162,17 @@ a magnet and a shareable link, and your tab becomes the site's first seed.
 
 Every reader who opens the link seeds it too, for as long as their tab is open.
 
+### Large sites
+
+A site up to 50 MB is downloaded whole by everyone who opens it, so every
+reader becomes a complete copy. A larger one — an archive, a big wiki — is
+fetched only as it is read: the page you open, its images, the pages you
+follow. The status bar says "fetched as you read" instead of a percentage.
+
+Such readers seed only the pieces they have, so a large site still needs
+somebody holding all of it: its publisher's tab, a
+[seeder](#seeding-from-a-server), or a reader who keeps it on their device.
+
 ### Linking to a page
 
 A link can open a page other than the home page — a new post, say. Add

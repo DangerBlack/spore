@@ -338,6 +338,15 @@ a tab is seeded until that tab closes.
 
 If that announcement is a problem for a particular site, close the tab.
 
+**A large site shows roughly what you read of it.** A site over 50 MB is
+fetched only as it is read (`WHOLE_SITE_BYTES` in `js/config.js`), and
+BitTorrent peers tell each other which pieces they hold. So the other peers of
+a large site can work out, roughly, which of its files you have — which pages
+you read. A reader of a small site downloads all of it and gives nothing away
+about which pages they looked at. The cost of the alternative, making everyone
+download all of a very large site to read one page of it, is what keeps this
+the default above the threshold.
+
 ## Keeping a site on this device
 
 By default Spore writes **nothing** to disk. A site you read lives in memory and
