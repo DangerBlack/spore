@@ -1,8 +1,11 @@
 # Mutable sites
 
-**Status: draft. Nothing in this document is implemented.** It exists to be
-argued with before any code is written. Where something is unproven it says so;
-the open questions at the end are real, not rhetorical.
+**Status: implemented in part.** Signed successors are built — `spore.pub`,
+`spore.sig`, records carried peer to peer by the `sp_update` extension, and
+the offer a reader can take or leave. The rendezvous swarm, introductions,
+flagging and key rotation are not. [What is implemented](#what-is-implemented)
+has the exact line. Where something is unproven it says so; the open questions
+at the end are real, not rhetorical.
 
 ## The problem
 
