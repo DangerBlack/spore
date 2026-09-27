@@ -114,17 +114,21 @@ export function pageArrived (document, url) {
  * Only a real click by the reader counts. With scripts on, a site can call
  * `.click()` on its own links; that is not the reader choosing to leave, so it
  * gets the old behaviour, which is nothing. A click a site's own script has
- * already handled (`defaultPrevented`) is left to it.
+ * already handled (`defaultPrevented`) is left to it — which is why callers
+ * listen on the frame's *window*, the last stop of a click, and attach after
+ * the page has loaded: a site's own handlers, wherever it put them, run first.
  *
  * @returns {string|null} the absolute URL, or null to let the click be
  */
 export function linkLeaving (event, own) {
   if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return null
-  const anchor = event.target?.closest?.('a[href], area[href]')
-  // An SVG link's href is not a string; it keeps the old behaviour.
-  if (!anchor || typeof anchor.href !== 'string') return null
+  const anchor = event.target?.closest?.('a, area')
+  if (!anchor) return null
+  // An SVG link's href is an SVGAnimatedString, relative until resolved.
+  const href = typeof anchor.href === 'string' ? anchor.href : anchor.href?.baseVal
+  if (!href) return null
   let url
-  try { url = new URL(anchor.href) } catch { return null }
+  try { url = new URL(href, anchor.baseURI) } catch { return null }
   return url.href.startsWith(own) ? null : url.href
 }
 

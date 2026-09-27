@@ -3656,7 +3656,16 @@ async function seedLinkSite (page) {
       <p><a id="out" href="https://example.org/page?q=1">out</a></p>
       <p><a id="spore" href="magnet:?xt=urn:btih:${other}&dn=Other%20site">spore</a></p>
       <p><a id="gate" href="https://another-gate.example/#magnet:?xt=urn:btih:${viaGate}&dn=Via%20gate">via gate</a></p>
-      <p><a id="inside" href="two.html">inside</a></p>`], 'index.html', { type: 'text/html' })
+      <p><a id="inside" href="two.html">inside</a></p>
+      <p><svg width="120" height="24"><a id="svgout" href="https://example.org/svg"><text x="0" y="16">svg link</text></a></svg></p>
+      <p><a id="hexfrag" href="https://example.org/commit#${'a'.repeat(40)}">a commit</a></p>
+      <p><a id="routed" href="https://example.org/routed">handled by the site</a></p>
+      <script>
+        // A site's own router, on the window, as a single-page app would have it.
+        addEventListener('click', e => {
+          if (e.target.closest('#routed')) { e.preventDefault(); document.title = 'routed' }
+        })
+      </script>`], 'index.html', { type: 'text/html' })
     const two = new File(['<h1>two</h1>'], 'two.html', { type: 'text/html' })
     index.fullPath = 'links/index.html'
     two.fullPath = 'links/two.html'
@@ -3747,6 +3756,46 @@ async function checkLinksOutOfASite (page) {
   check('a link to a site through another gate opens it here, not there',
     viaGate?.what.includes('Via gate') && landed.origin === before && landed.hash.includes(VIA_GATE),
     JSON.stringify({ what: viaGate?.what, ...landed }).slice(0, 120))
+
+  // An SVG link's href is not a string, and must not be left out for it.
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+  await site.click('#svgout text')
+  await wait(300)
+  const svg = await linkDialog(page)
+  check('an outside link inside an SVG asks like any other',
+    svg?.leave?.href === 'https://example.org/svg', JSON.stringify(svg?.leave ?? null))
+  await page.click('#link-stay').catch(() => {})
+
+  // A web address whose fragment merely looks like an infohash is the web.
+  await page.evaluate(() => { location.hash = '' })
+  await wait(500)
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+  await site.click('#hexfrag')
+  await wait(300)
+  const hexfrag = await linkDialog(page)
+  check('a web link whose fragment looks like an infohash is treated as the web, not as Spore',
+    hexfrag?.title === 'Leave Spore?', hexfrag?.title)
+  await page.click('#link-stay').catch(() => {})
+
+  // With scripts on, a site that handles a link itself is left to do so.
+  await page.evaluate(h => {
+    const allowed = JSON.parse(localStorage.getItem('spore.scripts-allowed') ?? '[]')
+    localStorage.setItem('spore.scripts-allowed', JSON.stringify([...allowed, h]))
+    location.hash = ''
+  }, hash)
+  await wait(500)
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+  await site.click('#routed')
+  await wait(300)
+  const routed = { dialog: await linkDialog(page), title: await site.evaluate(() => document.title) }
+  check('a link the site\'s own script handles, even on the window, is left to it',
+    routed.dialog === null && routed.title === 'routed', JSON.stringify(routed).slice(0, 100))
 
   await page.evaluate(() => { location.hash = '' })
   await wait(500)
