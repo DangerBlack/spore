@@ -3661,6 +3661,7 @@ async function seedLinkSite (page) {
       <p><a id="hexfrag" href="https://example.org/commit#${'a'.repeat(40)}">a commit</a></p>
       <p><a id="routed" href="https://example.org/routed">handled by the site</a></p>
       <p><a id="late" href="https://example.org/late">handled by a handler added later</a></p>
+      <div id="shadowhost"><template shadowrootmode="open"><a id="inshadow" href="https://example.org/shadow">in a shadow root</a></template></div>
       <p><a id="gateenc" href="https://another-gate.example/#magnet%3A?xt=urn:btih:${viaGate}&dn=Encoded">escaped gate link</a></p>
       <p><a id="gatelet" href="https://another-gate.example/#%6Dagnet:?xt=urn:btih:${viaGate}&dn=Letters">letter-escaped gate link</a></p>
       <script>
@@ -3832,6 +3833,14 @@ async function checkLinksOutOfASite (page) {
   const escapedGate = await linkDialog(page)
   check('a gate link with an escaped fragment is still a Spore link',
     escapedGate?.title === 'Open another Spore site?' && escapedGate.what.includes('Encoded'), escapedGate?.title)
+  await closeLinkDialog(page)
+
+  // A link inside a shadow root, declared in plain HTML.
+  await site.click('pierce/#inshadow')
+  await wait(300)
+  const shadow = await linkDialog(page)
+  check('an outside link inside a shadow root asks like any other',
+    shadow?.leave?.href === 'https://example.org/shadow', JSON.stringify(shadow?.leave ?? null))
   await closeLinkDialog(page)
 
   // A web address whose fragment merely looks like an infohash is the web.
