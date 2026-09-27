@@ -66,9 +66,11 @@ export function keptSites () {
  * @param {(done: number, total: number) => void} [onProgress]
  */
 export async function keep (torrent, onProgress = () => {}) {
-  if (!torrent.done) {
-    throw new Error('This site is still downloading. Wait until it has finished, then keep it.')
-  }
+  // Keeping is asking for all of it. A site fetched as it is read has only
+  // the pieces its reader looked at, and nothing else will ever fetch the
+  // rest — refusing here, as this once did for any unfinished site, made
+  // exactly the sites that most need a full copy impossible to keep.
+  if (!torrent.done) await fetchWhole(torrent, onProgress)
   await requestPersistence()
 
   const total = torrent.pieces.length
@@ -97,6 +99,27 @@ export async function keep (torrent, onProgress = () => {}) {
     magnetURI: torrent.magnetURI,
     torrentFile: new Uint8Array(torrent.torrentFile),
     savedAt: Date.now()
+  })
+}
+
+/** Select every piece and wait until all of them are here. */
+function fetchWhole (torrent, onProgress) {
+  return new Promise((resolve, reject) => {
+    const total = torrent.pieces.length
+    const tick = () => onProgress(Math.round(torrent.progress * total), total, 'fetching')
+    const timer = setInterval(tick, 500)
+    const finish = err => {
+      clearInterval(timer)
+      torrent.removeListener('done', onDone)
+      torrent.removeListener('error', finish)
+      err ? reject(err) : resolve()
+    }
+    const onDone = () => finish()
+    torrent.once('done', onDone)
+    torrent.once('error', finish)
+    torrent.select(0, total - 1)
+    tick()
+    if (torrent.done) finish()
   })
 }
 
