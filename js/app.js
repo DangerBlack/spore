@@ -1919,6 +1919,10 @@ async function onKeepToggle () {
   // Before the question: agreeing to keep something and then being refused
   // is worse than being told at once why it cannot be done here.
   const refusal = await whyNotKeep(torrent)
+  // The reader may have moved on while the browser was asked for its storage
+  // estimate — another site, or the box unticked — and then there is nothing
+  // left to ask about, let alone keep.
+  if (current?.torrent !== torrent || !ui.keep.checked) return
   if (refusal) {
     ui.keep.checked = false
     ui.notice.textContent = refusal.kind === 'memory'
