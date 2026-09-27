@@ -1324,6 +1324,11 @@ async function verifyContent (torrent, entry, key) {
     .reduce((total, file) => total + file.length, 0)
 
   if (weight > WHOLE_SITE_BYTES) {
+    // Checked once all of it is here, however it got here: kept, or simply
+    // read to the end. Then checking costs no download.
+    torrent.once('done', () => {
+      if (current?.torrent === torrent && authorship?.key?.hex === key.hex) verifyContent(torrent, entry, key)
+    })
     return settle({
       status: 'unverified',
       reason: `checking this would download ${formatBytes(weight)} of it`
@@ -1939,12 +1944,6 @@ async function onKeepToggle () {
       ui.progress.textContent = `${phase === 'fetching' ? 'fetching to keep' : 'keeping'} ${Math.round((done / total) * 100)}%`
     })
     await refreshKeptList()
-    // All of it is here now, so a signature that was too costly to check
-    // unasked can be checked — the chip said "until the reader has all of it".
-    if (current?.torrent === torrent && authorship?.key && authorship.verified?.status === 'unverified') {
-      authorship.verified = null
-      verifyContent(torrent, current.entry, authorship.key)
-    }
   } catch (err) {
     ui.keep.checked = false
     fail(err)

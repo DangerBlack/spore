@@ -138,24 +138,39 @@ export async function whyNotKeep (torrent) {
   return keepRefusal({ length: torrent.length, downloaded: torrent.downloaded, done: torrent.done, inMemory, free })
 }
 
-/** Select every piece and wait until all of them are here. */
-function fetchWhole (torrent, onProgress) {
+/**
+ * Select every piece and wait until all of them are here.
+ *
+ * Not before `ready`: a site is shown once its metadata arrives, and its
+ * pieces are laid out only after that, so Keep can be pressed while there are
+ * none. Selecting then selected nothing, `done` never came, and the control
+ * stayed disabled for good.
+ *
+ * Exported for the check that proves that, with a stand-in torrent.
+ */
+export function fetchWhole (torrent, onProgress = () => {}) {
   return new Promise((resolve, reject) => {
-    const total = torrent.pieces.length
-    const tick = () => onProgress(Math.round(torrent.progress * total), total, 'fetching')
-    const timer = setInterval(tick, 500)
+    let timer = null
     const finish = err => {
       clearInterval(timer)
+      torrent.removeListener('ready', start)
       torrent.removeListener('done', onDone)
       torrent.removeListener('error', finish)
       err ? reject(err) : resolve()
     }
     const onDone = () => finish()
+    const start = () => {
+      const total = torrent.pieces.length
+      const tick = () => onProgress(Math.round(torrent.progress * total), total, 'fetching')
+      timer = setInterval(tick, 500)
+      torrent.select(0, total - 1)
+      tick()
+      if (torrent.done) finish()
+    }
     torrent.once('done', onDone)
     torrent.once('error', finish)
-    torrent.select(0, total - 1)
-    tick()
-    if (torrent.done) finish()
+    if (torrent.ready) start()
+    else torrent.once('ready', start)
   })
 }
 
