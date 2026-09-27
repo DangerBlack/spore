@@ -115,8 +115,7 @@ export function pageArrived (document, url) {
  * `.click()` on its own links; that is not the reader choosing to leave, so it
  * gets the old behaviour, which is nothing. A click a site's own script has
  * already handled (`defaultPrevented`) is left to it — which is why callers
- * listen on the frame's *window*, the last stop of a click, and attach after
- * the page has loaded: a site's own handlers, wherever it put them, run first.
+ * listen through `listenLast`, so a site's own handlers always run first.
  *
  * @returns {string|null} the absolute URL, or null to let the click be
  */
@@ -130,6 +129,25 @@ export function linkLeaving (event, own) {
   let url
   try { url = new URL(href, anchor.baseURI) } catch { return null }
   return url.href.startsWith(own) ? null : url.href
+}
+
+/**
+ * Hear every click in `win`, after everything the page itself does with it.
+ *
+ * On the window, which is the last stop of a click, and moved to the end of
+ * the window's own listeners on every click. A site that registers a handler
+ * *later* — after a fetch, say — would otherwise run after this one, and find
+ * the gate's dialog already open for a link it meant to handle itself. The
+ * browser takes its copy of a target's listeners when the click reaches that
+ * target's bubble phase, so re-adding this one in the capture phase, at the
+ * very start of the click, puts it last in that copy.
+ */
+export function listenLast (win, onClick) {
+  win.addEventListener('click', () => {
+    win.removeEventListener('click', onClick)
+    win.addEventListener('click', onClick)
+  }, true)
+  win.addEventListener('click', onClick)
 }
 
 /**

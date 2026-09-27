@@ -25,7 +25,7 @@
 
 import { TORRENT_PATH } from './config.js'
 import { RELAY, contentOrigin, encodePath, isolation, isolationProblem } from './isolation.js'
-import { linkLeaving, pageArrived } from './viewer.js'
+import { linkLeaving, listenLast, pageArrived } from './viewer.js'
 
 /** Same budget the gate's own viewer gives a page before calling it stuck. */
 const LOAD_TIMEOUT_MS = 15_000
@@ -190,14 +190,16 @@ function show (src, { scripts, sandbox }) {
     if (here.startsWith(prefix)) {
       parent.postMessage({ spore: RELAY.page, relay: location.href, path: here.slice(prefix.length) }, isolation.gate)
     }
-    // A new window on every load, so listened to on every load. On the window,
-    // after load, so the site's own handlers run first — see `linkLeaving`.
-    frame.contentWindow?.addEventListener('click', event => {
-      const href = linkLeaving(event, prefix)
-      if (!href) return
-      event.preventDefault()
-      parent.postMessage({ spore: RELAY.link, relay: location.href, href }, isolation.gate)
-    })
+    // A new window on every load, so listened to on every load, after the
+    // site's own handlers — see `linkLeaving` and `listenLast`.
+    if (frame.contentWindow) {
+      listenLast(frame.contentWindow, event => {
+        const href = linkLeaving(event, prefix)
+        if (!href) return
+        event.preventDefault()
+        parent.postMessage({ spore: RELAY.link, relay: location.href, href }, isolation.gate)
+      })
+    }
   })
 
   frame.src = src

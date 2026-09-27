@@ -42,7 +42,7 @@ import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
 } from './authors.js'
-import { Viewer, linkLeaving, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
+import { Viewer, linkLeaving, listenLast, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
 
 const el = id => document.getElementById(id)
 
@@ -643,10 +643,10 @@ function onViewerLoad (event) {
   followPage(infoHash, rest.join('/'))
 
   // A new window on every load, so listened to on every load. The listener is
-  // the gate's own code, so it runs whether or not the site may run any; on
-  // the window, after load, so the site's own handlers run first.
+  // the gate's own code, so it runs whether or not the site may run any, and
+  // after the site's own handlers — see `listenLast`.
   const own = `${prefix}${infoHash}/`
-  ui.viewer.frame.contentWindow.addEventListener('click', event => {
+  listenLast(ui.viewer.frame.contentWindow, event => {
     const href = linkLeaving(event, own)
     if (!href) return
     event.preventDefault()
@@ -686,10 +686,13 @@ function offerLink (href) {
   try { url = new URL(href) } catch { return }
 
   // A web address counts as a Spore link only when its fragment is a magnet —
-  // what every gate's Share produces. A bare 40-hex fragment is also a git
-  // commit, and 32 letters can be an ordinary anchor: those are the web.
+  // what every gate's Share produces, escaped or not. A bare 40-hex fragment
+  // is also a git commit, and 32 letters can be an ordinary anchor: those are
+  // the web, whatever the address bar would make of them pasted in.
+  let fragment = ''
+  try { fragment = decodeFragment(url.hash.slice(1)) } catch {}
   let site = null
-  if (url.protocol === 'magnet:' || url.hash.startsWith('#magnet:')) {
+  if (url.protocol === 'magnet:' || fragment.startsWith('magnet:')) {
     try { site = parseSiteRef(url.href) } catch { site = null }
   }
   if (site) return askToOpenSite(url, site)
