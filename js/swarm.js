@@ -61,12 +61,11 @@ export async function startWorker () {
     )
   } catch (err) {
     // Overwhelmingly this is a browser set to block site data, which disables
-    // service workers outright. Measured, the two say it differently: Firefox
-    // throws a SecurityError ("The operation is insecure"); Chrome throws a
-    // NotSupportedError — a name it also uses for other refusals — whose
-    // message says "The user denied permission to use Service Worker".
-    const blocked = err?.name === 'SecurityError' || /denied permission/i.test(err?.message ?? '')
-    throw new WorkerRefused(blocked ? 'blocked' : 'failed', err?.message)
+    // service workers outright. The refusal itself is no way to tell: Firefox
+    // throws a SecurityError, a name it uses for other refusals too; Chrome a
+    // NotSupportedError whose only tell is its wording; and wording is not a
+    // contract. So the condition is asked about directly — see siteDataBlocked.
+    throw new WorkerRefused(siteDataBlocked() ? 'blocked' : 'failed', err?.message)
   }
 
   // A stale worker is a classic way to spend an afternoon on a bug that is
@@ -77,6 +76,24 @@ export async function startWorker () {
     await controllerTakesOver(registration)
   }
   return registration
+}
+
+/**
+ * Is this browser refusing this site any storage at all? Asked by trying, the
+ * one answer that means the same in every browser and every language: with
+ * site data blocked, Chrome and Firefox both refuse a write to localStorage
+ * with a SecurityError, and both allow it otherwise. (`navigator.cookieEnabled`
+ * looked like the obvious signal and is not: measured, Chrome leaves it true
+ * with site data blocked.)
+ */
+function siteDataBlocked () {
+  try {
+    localStorage.setItem('spore.storage-probe', '1')
+    localStorage.removeItem('spore.storage-probe')
+    return false
+  } catch {
+    return true
+  }
 }
 
 /**
