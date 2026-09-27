@@ -173,11 +173,19 @@ let statsTimer = null
 /** True once the swarm client exists; until then there is nothing to publish to. */
 let ready = false
 /**
- * Why this gate cannot run in this browser, once that is known — and then it
- * is the answer to everything: opening, pasting, publishing. See WorkerRefused.
- * @type {WorkerRefused|null}
+ * Why this gate cannot run here, once that is known — and then it is the
+ * answer to everything: opening, pasting, publishing. See WorkerRefused.
+ * @type {Error|null}
  */
 let cannotRun = null
+/**
+ * Settles when starting up has finished, whichever way it went. Routing and
+ * publishing wait for it: a magnet pasted while the worker was still being
+ * registered used to reach for a client that did not exist yet, and "The
+ * swarm client has not been started" won the race against the real reason.
+ */
+let settleStart
+const started = new Promise(resolve => { settleStart = resolve })
 
 // Declared here, with the rest of the module state, rather than beside the
 // function that reads them. `boot()` runs while this module is still being
@@ -304,10 +312,14 @@ async function boot () {
     if (!isolation) document.addEventListener('load', onViewerLoad, true)
     if (isolation) watchForRefusedFrames()
   } catch (err) {
-    if (err instanceof WorkerRefused) cannotRun = err
+    // Whatever stopped it, nothing after this can work: every later way in
+    // shows this, not an error of its own about a client that never started.
+    cannotRun = err
+    settleStart()
     return fail(err)
   }
   ready = true
+  settleStart()
 
   // Asked before any site is shown, because the answer decides how it is shown.
   // Not awaited on the critical path: a browser that never answers is treated
@@ -390,6 +402,7 @@ let opening = null
  * generic error instead of the site, or instead of an honest 404.
  */
 async function route () {
+  await started
   if (cannotRun) return fail(cannotRun)
   const ref = currentRef()
   if (!ref) return showWelcome()
@@ -2241,6 +2254,7 @@ function wireDropTarget () {
 }
 
 async function seed (files, name) {
+  await started
   if (cannotRun) return fail(cannotRun)
   if (!ready) {
     return failToPublish(new Error('Spore is still starting up. Try that again in a moment.'))
@@ -2778,7 +2792,7 @@ function fail (error) {
   ui.errorRef.parentElement.hidden = !currentRef()
   ui.errorRetry.hidden = !retry
   // "Publish a site instead" leads back here when nothing can run at all.
-  ui.errorHome.hidden = error instanceof WorkerRefused
+  ui.errorHome.hidden = error === cannotRun
 
   ui.error.hidden = false
   ui.notice.hidden = true

@@ -443,6 +443,7 @@ async function run () {
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkSiteDataBlocked()
+  await checkOtherWorkerRefusals()
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
   await checkMissingSiteAndHome(page)
@@ -3752,6 +3753,69 @@ async function checkSiteDataBlocked () {
   }
 }
 
+/**
+ * The other ways a worker can be refused, and the race that used to hide the
+ * reason. Each in a context of its own, with the service worker API altered
+ * before the gate's code runs:
+ *
+ *  - none at all here (not HTTPS, or a mode without them);
+ *  - a refusal that is not about site data, shown with its own message;
+ *  - a refusal that takes two seconds, with a magnet pasted meanwhile — which
+ *    used to reach for a client that did not exist yet and say so, instead of
+ *    the reason.
+ */
+async function checkOtherWorkerRefusals () {
+  let early = null
+  const attempt = async (alter, then) => {
+    const page = await browser.createBrowserContext().then(c => c.newPage())
+    try {
+      await page.evaluateOnNewDocument(alter)
+      await page.goto(origin + '/', { waitUntil: 'load' })
+      if (then) await then(page)
+      await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 15_000 }).catch(() => {})
+      await wait(500)
+      return await page.evaluate(() => ({
+        title: document.getElementById('error').hidden ? null : document.getElementById('error-title').textContent,
+        detail: document.getElementById('error-detail').textContent
+      }))
+    } finally {
+      await closeContexts(page)
+    }
+  }
+
+  const none = await attempt(() => { delete Navigator.prototype.serviceWorker })
+  check('a browser with no service workers here is told why, not shown an error from inside',
+    none.title === 'Spore cannot run here' && /HTTPS/.test(none.detail), `${none.title} — ${none.detail.slice(0, 60)}`)
+
+  const other = await attempt(() => {
+    ServiceWorkerContainer.prototype.register = () => Promise.reject(new TypeError('the worker script failed to load'))
+  })
+  check('a refusal that is not about site data says so, with the browser\'s reason',
+    other.title === 'Spore could not start' && other.detail.includes('failed to load'), `${other.title} — ${other.detail.slice(0, 80)}`)
+
+  const raced = await attempt(() => {
+    ServiceWorkerContainer.prototype.register = () => new Promise((resolve, reject) => setTimeout(() =>
+      reject(new DOMException('The user denied permission to use Service Worker.', 'NotSupportedError')), 2000))
+  }, async page => {
+    // Pasted while the worker is still being registered — and looked at while
+    // it still is: the wrong message used to show here, and was overwritten
+    // two seconds later, which a check of the end state alone cannot see.
+    await page.evaluate(() => {
+      const address = document.getElementById('address')
+      address.value = 'magnet:?xt=urn:btih:' + 'c'.repeat(40)
+      address.form.requestSubmit()
+    })
+    await wait(700)
+    early = await page.evaluate(() => document.getElementById('error').hidden ? null
+      : `${document.getElementById('error-title').textContent}: ${document.getElementById('error-detail').textContent}`)
+    await wait(2500)
+  })
+  check('a magnet pasted while Spore is still starting waits for it, rather than failing on its own',
+    early === null, early ?? 'nothing shown yet')
+  check('and then gets the real reason',
+    raced.title === 'This browser is blocking what Spore needs', raced.title ?? raced.detail.slice(0, 80))
+}
+
 /** A site whose links go everywhere a link can go, seeded from `page`. */
 async function seedLinkSite (page) {
   return page.evaluate(async (other, viaGate) => {
@@ -3788,12 +3852,32 @@ async function seedLinkSite (page) {
 /**
  * Close the link dialog the way a reader would, and make sure it closed: a
  * dialog left open is modal, and every click after it would fail for a reason
- * that has nothing to do with the check it lands in.
+ * that has nothing to do with the check it lands in. If it does not close, it
+ * says what the dialog did from the first close on — reopened, and when — which
+ * is what a CI log needs to tell a slow click from a duplicate report.
  */
 async function closeLinkDialog (page) {
   if (!(await page.$eval('#link-dialog', d => d.open))) return
+  await page.evaluate(() => {
+    if (window.__opens !== undefined) return
+    window.__opens = []
+    const show = HTMLDialogElement.prototype.showModal
+    HTMLDialogElement.prototype.showModal = function () {
+      if (this.id === 'link-dialog') window.__opens.push({ at: Math.round(performance.now()), url: document.getElementById('link-url').textContent })
+      return show.call(this)
+    }
+    document.getElementById('link-dialog').addEventListener('close', () => window.__opens.push({ closed: Math.round(performance.now()) }))
+  })
   await page.click('#link-stay')
-  await page.waitForFunction(() => !document.getElementById('link-dialog').open, { timeout: 5000 })
+  try {
+    await page.waitForFunction(() => !document.getElementById('link-dialog').open, { timeout: 5000 })
+  } catch (err) {
+    console.log('  [dialog] did not close:', JSON.stringify(await page.evaluate(() => ({
+      opens: window.__opens, open: document.getElementById('link-dialog').open,
+      active: document.activeElement?.id, stay: (() => { const r = document.getElementById('link-stay').getBoundingClientRect(); return [r.x, r.y, r.width, r.height, innerWidth, innerHeight] })()
+    }))))
+    throw err
+  }
 }
 
 /** What the link dialog says, or null when it is not open. */
