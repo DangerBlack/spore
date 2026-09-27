@@ -10,7 +10,7 @@
 // rather than dropped on `window` by a classic <script>.
 import WebTorrent from '../vendor/webtorrent.min.js'
 import {
-  DEFAULT_TRACKERS, METADATA_DEADLINE_MS, METADATA_QUIET_MS, METADATA_SILENT_MS
+  DEFAULT_TRACKERS, METADATA_DEADLINE_MS, METADATA_QUIET_MS, METADATA_SILENT_MS, WHOLE_SITE_BYTES
 } from './config.js'
 
 /**
@@ -239,12 +239,39 @@ export async function openTorrent (magnetURI, onJoin = () => {}) {
   const wt = getClient()
 
   const existing = await wt.get(magnetURI)
-  const torrent = existing ?? wt.add(magnetURI)
+  // Joined with nothing selected: the size is not known until the metadata
+  // arrives, and a site too large to take whole must not have started taking
+  // it by then. What the worker serves selects its own pieces as it streams.
+  const torrent = existing ?? wt.add(magnetURI, { deselect: true })
 
   // Handed over before the wait, so the caller can show what is happening
   // instead of a spinner that means nothing.
   onJoin(torrent)
-  return await withMetadata(torrent)
+  await withMetadata(torrent)
+  if (!existing) takeWholeIfSmall(torrent)
+  return torrent
+}
+
+/**
+ * A site up to WHOLE_SITE_BYTES is downloaded whole, as every site used to be;
+ * a larger one only as it is read. See WHOLE_SITE_BYTES for why both.
+ *
+ * On `ready` rather than on `metadata`: the torrent's pieces are laid out
+ * between the two, and a selection made earlier covers nothing.
+ */
+function takeWholeIfSmall (torrent) {
+  const take = () => {
+    if (!torrent.destroyed && torrent.length <= WHOLE_SITE_BYTES && torrent.pieces.length > 0) {
+      torrent.select(0, torrent.pieces.length - 1)
+    }
+  }
+  if (torrent.ready) take()
+  else torrent.once('ready', take)
+}
+
+/** Whether this torrent is fetched only as it is read. */
+export function fetchedAsRead (torrent) {
+  return torrent.length > WHOLE_SITE_BYTES
 }
 
 /**

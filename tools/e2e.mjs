@@ -451,6 +451,7 @@ async function run () {
   await checkTorrentWithoutIndex(page)
   await checkPagesInsideASite(page, infoHash)
   await checkLinksOutOfASite(page)
+  await checkLargeSitesFetchedAsRead()
   await checkSigningCore(page)
   await checkUpdateOverTheWire()
   await checkUpdateOffer()
@@ -3829,6 +3830,75 @@ async function checkOtherWorkerRefusals () {
     early === null, early ?? 'nothing shown yet')
   check('and then gets the real reason',
     raced.title === 'This browser is blocking what Spore needs', raced.title ?? raced.detail.slice(0, 80))
+}
+
+/**
+ * A site up to WHOLE_SITE_BYTES is downloaded whole by whoever opens it, so
+ * every reader becomes a full copy; a larger one only as it is read. Both
+ * sites here carry a file their page never asks for: the small site's arrives
+ * anyway, the large site's does not — and the status bar says why the large
+ * one is not at 100%, instead of looking stuck.
+ */
+async function checkLargeSitesFetchedAsRead () {
+  const { WHOLE_SITE_BYTES } = await import('../js/config.js')
+  const publisher = await browser.createBrowserContext().then(c => c.newPage())
+  const reader = await browser.createBrowserContext().then(c => c.newPage())
+  try {
+    for (const page of [publisher, reader]) {
+      await page.goto(origin + '/', { waitUntil: 'load' })
+      await page.waitForFunction(
+        () => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+    }
+    const sites = await publisher.evaluate(async big => {
+      const { seedTorrent } = await import('/js/swarm.js')
+      const site = async (name, extra) => {
+        const files = [new File([`<h1>${name}</h1>`], 'index.html', { type: 'text/html' }), extra]
+        files[0].fullPath = `${name}/index.html`
+        files[1].fullPath = `${name}/${extra.name}`
+        return (await seedTorrent(files, { name })).magnetURI
+      }
+      return {
+        small: await site('small-site', new File([new Uint8Array(200_000)], 'unread.bin')),
+        large: await site('large-site', new File([new Uint8Array(big)], 'unread.bin'))
+      }
+    }, WHOLE_SITE_BYTES + 2_000_000)
+
+    // Waited on by infohash: both sites' pages are index.html, and a wait for
+    // "a page called index.html" is satisfied by the one already showing.
+    const open = async magnet => {
+      const hash = /btih:([0-9a-f]{40})/.exec(magnet)[1]
+      await reader.evaluate(m => { location.hash = m }, magnet)
+      await reader.waitForFunction(h => document.getElementById('viewer').src.includes(`/${h}/`) &&
+        document.getElementById('viewer').src.endsWith('/index.html'), { timeout: 60_000 }, hash)
+    }
+    const state = () => reader.evaluate(async () => {
+      const { getClient } = await import('/js/swarm.js')
+      const hash = /btih:([0-9a-f]{40})/.exec(decodeURIComponent(location.hash))[1]
+      const torrent = await getClient().get(hash)
+      return { done: torrent.done, downloaded: torrent.downloaded, length: torrent.length,
+        progress: document.getElementById('progress').textContent }
+    })
+
+    await open(sites.small)
+    let small
+    for (let waited = 0; waited < 30_000; waited += 1000) {
+      small = await state()
+      if (small.done) break
+      await wait(1000)
+    }
+    check('a small site is downloaded whole by whoever opens it, the file nobody asked for too',
+      small.done, JSON.stringify(small))
+
+    await open(sites.large)
+    await wait(5000)
+    const large = await state()
+    check('a large site is fetched only as it is read, not whole',
+      !large.done && large.downloaded < 5_000_000, `${large.downloaded} of ${large.length} bytes`)
+    check('and the status bar says so rather than showing a stuck percentage',
+      large.progress.includes('fetched as you read'), large.progress)
+  } finally {
+    await closeContexts(publisher, reader)
+  }
 }
 
 /** A site whose links go everywhere a link can go, seeded from `page`. */
