@@ -29,7 +29,8 @@ export const RELAY = {
   request: 'relay/request',
   policy: 'relay/policy',
   shown: 'relay/shown',
-  page: 'relay/page'
+  page: 'relay/page',
+  link: 'relay/link'
 }
 
 let problem = null
@@ -158,8 +159,9 @@ export function relayURL (infoHash, path, { scripts, sandbox }) {
  * @param {() => (Window|null)} options.frame  the viewer frame's window, now
  * @param {(infoHash: string, report: object) => void} options.onShown
  * @param {(infoHash: string, report: object) => void} options.onPage
+ * @param {(infoHash: string, report: object) => void} options.onLink
  */
-export function answerRelays ({ server, scope, frame, onShown, onPage }) {
+export function answerRelays ({ server, scope, frame, onShown, onPage, onLink }) {
   if (!isolation) return
 
   // Not rate-limited. A site with scripts on can send as many requests as it
@@ -167,7 +169,7 @@ export function answerRelays ({ server, scope, frame, onShown, onPage }) {
   // other site's data. A scripted page could burn its own tab anyway.
   window.addEventListener('message', event => {
     const kind = event.data?.spore
-    if (kind !== RELAY.request && kind !== RELAY.policy && kind !== RELAY.shown && kind !== RELAY.page) return
+    if (![RELAY.request, RELAY.policy, RELAY.shown, RELAY.page, RELAY.link].includes(kind)) return
 
     const infoHash = infoHashOf(event.origin)
     if (!infoHash || !event.source || event.source !== frame()) return
@@ -184,6 +186,10 @@ export function answerRelays ({ server, scope, frame, onShown, onPage }) {
     }
     if (kind === RELAY.page) {
       onPage(infoHash, event.data)
+      return
+    }
+    if (kind === RELAY.link) {
+      onLink(infoHash, event.data)
       return
     }
     if (port) relayRequest(server, scope, infoHash, event.data.request, port)

@@ -111,6 +111,49 @@ navigation, so a site cannot replace the gate; no popups, which would otherwise
 be an egress channel CSP does not cover; no forms, no downloads, no plugins, no
 pointer lock, no modals.
 
+### Links out of a site: asked, then followed
+
+The egress block is about what a site makes the browser load **without the
+reader deciding**: an image, a font, a stylesheet, a `<meta http-equiv=refresh>`
+redirect. All of those still leak the reader's IP address to a third party, and
+all of them are still refused.
+
+A link the reader clicks is a different thing: a choice to go somewhere. The
+sandbox used to refuse those as well, silently, which made every link out of a
+site dead (only a middle click got through). Now the gate handles them:
+
+- **The gate listens for clicks in the site's frame.** On the shared origin the
+  listener is the gate's own code, attached to the frame's document, so it runs
+  whether or not the site may run any. With content isolation on, `relay.js`
+  listens and hands the link to the gate. Both apply one rule, `linkLeaving` in
+  `viewer.js`.
+- **Only a real click counts** (`event.isTrusted`). A script can call `.click()`
+  on a link, but that is not the reader choosing to leave, so it gets the old
+  behaviour: nothing. The site's own links (anything under its torrent's
+  prefix) are not touched.
+- **An outside link opens a dialog** that names the host and shows the whole
+  address, so a look-alike cannot hide in a truncated one. It says the site will
+  see the reader's IP. The way out is a real link in the dialog, with
+  `target=_blank rel="noopener noreferrer"`: a new tab, no referrer, no opener.
+  It is not `window.open` after a `confirm()`, which a popup blocker stops if the
+  reader takes a few seconds to decide.
+- **A link to another Spore site** — a `magnet:`, or any gate's URL whose
+  fragment holds one — asks as well, then opens **on this gate**. The gate the
+  author wrote into the link is never used. Opening it joins that site's swarm,
+  which is exactly what pasting its magnet would do, and the dialog says so.
+- **Anything else is refused as before**: a same-origin page outside the
+  torrent, `javascript:`, `mailto:`.
+
+With content isolation on, the relay's report names the relay that sent it. The
+gate acts only on the relay its frame holds now, the same rule as for page
+reports. A site with scripts on shares the relay's origin, so it could post a
+fake report. The most that does is open the dialog, which still needs the
+reader's click.
+
+Middle-click and "open in new tab" belong to the browser, not the page, and
+bypass the question exactly as they did before. The tab they open receives no
+referrer: responses carry `Referrer-Policy: same-origin`.
+
 ### WebKit will not serve a sandboxed frame
 
 Measured with two frames in one document differing only in the attribute:

@@ -28,6 +28,9 @@ const option = (name, fallback) => {
 const CHROME = option('--chrome', process.env.CHROME ?? '/usr/bin/google-chrome')
 const SITE = 'example-site'
 const SITE_FILES = ['index.html', 'about.html', 'probe.js', 'css/site.css', 'css/leaf.svg']
+/** Sites the link checks point at; nobody seeds them, and nobody needs to. */
+const OTHER_SITE = 'd'.repeat(40)
+const VIA_GATE = 'e'.repeat(40)
 
 /** A .zip whose trailing comment contains the end-of-directory signature. */
 const COMMENTED_ZIP = 'UEsDBBQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAaW5kZXguaHRtbLPJMLRzzs/NTc0rSU2x0QfyAFBLAQIUAxQAAAAIABqSLV25AlbGEgAAABIAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAADoAAAAiAFBLBQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
@@ -428,6 +431,7 @@ async function run () {
   await checkKeptSiteSurvivesReload(page)
   await checkTorrentWithoutIndex(page)
   await checkPagesInsideASite(page, infoHash)
+  await checkLinksOutOfASite(page)
   await checkSigningCore(page)
   await checkUpdateOverTheWire()
   await checkUpdateOffer()
@@ -3645,6 +3649,109 @@ async function checkPagesInsideASite (page, infoHash) {
   await wait(500)
 }
 
+/** A site whose links go everywhere a link can go, seeded from `page`. */
+async function seedLinkSite (page) {
+  return page.evaluate(async (other, viaGate) => {
+    const index = new File([`<h1>links</h1>
+      <p><a id="out" href="https://example.org/page?q=1">out</a></p>
+      <p><a id="spore" href="magnet:?xt=urn:btih:${other}&dn=Other%20site">spore</a></p>
+      <p><a id="gate" href="https://another-gate.example/#magnet:?xt=urn:btih:${viaGate}&dn=Via%20gate">via gate</a></p>
+      <p><a id="inside" href="two.html">inside</a></p>`], 'index.html', { type: 'text/html' })
+    const two = new File(['<h1>two</h1>'], 'two.html', { type: 'text/html' })
+    index.fullPath = 'links/index.html'
+    two.fullPath = 'links/two.html'
+    const { seedTorrent } = await import('/js/swarm.js')
+    return (await seedTorrent([index, two], { name: 'links' })).infoHash
+  }, OTHER_SITE, VIA_GATE)
+}
+
+/** What the link dialog says, or null when it is not open. */
+function linkDialog (page) {
+  return page.evaluate(() => {
+    const dialog = document.getElementById('link-dialog')
+    if (!dialog.open) return null
+    const leave = document.getElementById('link-leave')
+    return {
+      title: document.getElementById('link-title').textContent,
+      what: document.getElementById('link-what').textContent,
+      leave: leave.hidden ? null : { href: leave.href, target: leave.target, rel: leave.rel },
+      open: !document.getElementById('link-open').hidden
+    }
+  })
+}
+
+/**
+ * Links that leave a site: asked about, then followed — never silently dead.
+ *
+ * An outside link opens a dialog naming its host, whose way out is a real link
+ * with no referrer and no opener; a link to another Spore site — a magnet, or
+ * any gate's URL — opens on this gate. The site's own links are left alone, and
+ * a click a script fakes is not the reader choosing to leave.
+ */
+async function checkLinksOutOfASite (page) {
+  const hash = await seedLinkSite(page)
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  let site = await siteFrame(page)
+
+  await site.click('#out')
+  await wait(300)
+  const out = await linkDialog(page)
+  check('a click on an outside link asks first, naming where it goes',
+    out?.title === 'Leave Spore?' && out.what.includes('example.org'), JSON.stringify(out))
+  check('and the way out is a real link: new tab, no referrer, no opener',
+    out?.leave?.href === 'https://example.org/page?q=1' && out.leave.target === '_blank' &&
+    /noopener/.test(out.leave.rel) && /noreferrer/.test(out.leave.rel), JSON.stringify(out?.leave))
+  check('and the site stays where it was', site.url().endsWith('/index.html'), site.url())
+  await page.click('#link-stay')
+
+  await site.evaluate(() => document.getElementById('out').click())
+  await wait(300)
+  check('a click the site\'s own script fakes does not ask', await linkDialog(page) === null)
+  // Unasked, the click keeps its old fate: the frame tries to leave, the gate's
+  // policy refuses it, and an error page replaces the site. So, back to it.
+  await page.evaluate(() => { location.hash = '' })
+  await wait(500)
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+
+  await site.click('#inside')
+  await page.waitForFunction(() => location.hash.includes('x.sp=two.html'), { timeout: 10_000 }).catch(() => {})
+  check('the site\'s own links are left alone', await linkDialog(page) === null &&
+    (await page.evaluate(() => location.hash)).includes('x.sp=two.html'))
+
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+  await site.click('#spore')
+  await wait(300)
+  const spore = await linkDialog(page)
+  check('a magnet link asks before opening another Spore site, by name',
+    spore?.title === 'Open another Spore site?' && spore.what.includes('Other site') && spore.open && !spore.leave,
+    JSON.stringify(spore))
+  await page.click('#link-open')
+  await page.waitForFunction(o => location.hash.includes(o), { timeout: 5000 }, OTHER_SITE).catch(() => {})
+  check('and opens it on this gate', (await page.evaluate(() => location.hash)).includes(OTHER_SITE))
+
+  await page.evaluate(h => { location.hash = h }, hash)
+  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
+  site = await siteFrame(page)
+  const before = await page.evaluate(() => location.origin)
+  await site.click('#gate')
+  await wait(300)
+  const viaGate = await linkDialog(page)
+  await page.click('#link-open').catch(() => {})
+  await page.waitForFunction(o => location.hash.includes(o), { timeout: 5000 }, VIA_GATE).catch(() => {})
+  const landed = await page.evaluate(() => ({ origin: location.origin, hash: location.hash }))
+  check('a link to a site through another gate opens it here, not there',
+    viaGate?.what.includes('Via gate') && landed.origin === before && landed.hash.includes(VIA_GATE),
+    JSON.stringify({ what: viaGate?.what, ...landed }).slice(0, 120))
+
+  await page.evaluate(() => { location.hash = '' })
+  await wait(500)
+}
+
 /**
  * A kept site survives a reload with nobody seeding it.
  *
@@ -4020,6 +4127,31 @@ async function runIsolated () {
     const unmoved = await page.evaluate(() => decodeURIComponent(location.hash))
     check('isolation: a late page report from a relay already replaced does not move the address',
       !unmoved.includes('x.sp='), unmoved.slice(-40))
+
+    // --- a link out of the site, clicked inside the relay's frame -------------
+    const linkHash = await seedLinkSite(page)
+    await page.evaluate(h => { location.hash = h }, linkHash)
+    await page.waitForFunction(h => document.getElementById('viewer').src.includes(h), { timeout: 20_000 }, linkHash)
+    const linkFrame = await siteFrame(page)
+    await linkFrame.click('#out')
+    await page.waitForFunction(() => document.getElementById('link-dialog').open, { timeout: 5000 }).catch(() => {})
+    const isoOut = await linkDialog(page)
+    check('isolation: an outside link clicked in the site asks on the gate',
+      isoOut?.leave?.href === 'https://example.org/page?q=1', JSON.stringify(isoOut))
+    await page.click('#link-stay').catch(() => {})
+
+    // A report from a relay the frame no longer holds is not a click.
+    const relayNow = page.frames().find(f => f.url().includes('/relay.html'))
+    await relayNow.evaluate(g => parent.postMessage({
+      spore: 'relay/link', relay: location.href + '&stale', href: 'https://example.org/'
+    }, g), gate)
+    await wait(500)
+    check('isolation: a link report from a relay already replaced is ignored', await linkDialog(page) === null)
+
+    await page.evaluate(h => { location.hash = h }, infoHash)
+    await page.waitForFunction(() => /index\.html/.test(new URL(document.getElementById('viewer').src).searchParams.get('path') ?? ''),
+      { timeout: 20_000 })
+    await siteFrame(page)
 
     // --- scripts on: the boundary this whole mode exists for -----------------
     asked.length = 0

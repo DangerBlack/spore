@@ -750,6 +750,23 @@ body.is-dragging .drop-overlay { display: flex; }
 }
 
 #no-entry-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+
+#link-dialog {
+  max-width: 32rem;
+  width: calc(100% - 2rem);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+#link-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+#link-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+#link-dialog p { margin: 0 0 12px; }
+/* The whole address, so a look-alike cannot hide in a truncated one. */
+.link-url code { word-break: break-all; }
+#link-leave { text-decoration: none; }
 #no-entry-dialog h2 { margin: 0 0 12px; font-size: 16px; }
 #no-entry-dialog p { margin: 0 0 12px; }
 
@@ -757,6 +774,7 @@ body.is-dragging .drop-overlay { display: flex; }
 #author-dialog,
 #isolation-dialog,
 #no-entry-dialog,
+#link-dialog,
 #diagnostics {
   max-height: calc(100dvh - 2rem);
   overflow-y: auto;

@@ -12,7 +12,9 @@
  *     origin boundary between the site and Spore;
  *  4. tells the gate whether the site actually arrived, since the gate cannot
  *     look inside a frame from another origin — and, as the reader follows
- *     links, which page of it is on screen.
+ *     links, which page of it is on screen;
+ *  5. hands the gate any link the reader clicks that leaves the site, so the
+ *     gate can say where it goes and ask. See `linkLeaving`.
  *
  * It is a separate document from the site so the site's HTML never has to be
  * rewritten to carry any of this. It is *not* a security boundary: a site with
@@ -23,7 +25,7 @@
 
 import { TORRENT_PATH } from './config.js'
 import { RELAY, contentOrigin, encodePath, isolation, isolationProblem } from './isolation.js'
-import { pageArrived } from './viewer.js'
+import { linkLeaving, pageArrived } from './viewer.js'
 
 /** Same budget the gate's own viewer gives a page before calling it stuck. */
 const LOAD_TIMEOUT_MS = 15_000
@@ -188,6 +190,13 @@ function show (src, { scripts, sandbox }) {
     if (here.startsWith(prefix)) {
       parent.postMessage({ spore: RELAY.page, relay: location.href, path: here.slice(prefix.length) }, isolation.gate)
     }
+    // A new document on every load, so listened to on every load.
+    frame.contentDocument?.addEventListener('click', event => {
+      const href = linkLeaving(event, prefix)
+      if (!href) return
+      event.preventDefault()
+      parent.postMessage({ spore: RELAY.link, relay: location.href, href }, isolation.gate)
+    })
   })
 
   frame.src = src

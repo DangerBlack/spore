@@ -59,6 +59,10 @@ l'unico chokepoint. Questo è più completo E più sicuro dei tag custom.
   (tutto deve risolvere dentro il torrent; URL esterni bloccati).
   Motivo: anche senza JS, un `<img>`/`background-image`/form verso un URL esterno
   rivela l'IP dell'utente. La difesa è sull'egress di rete, non solo sugli script.
+  Un **link cliccato** dall'utente è un'altra cosa: il gate lo intercetta, dice
+  dove porta (e che quel sito vedrà l'IP) e lo apre solo dopo conferma — web in
+  una tab nuova senza referrer, altri siti Spore sul gate corrente. I caricamenti
+  automatici restano bloccati. Vedi SECURITY.md, "Links out of a site".
 - **Script opt-in per-sito**: l'utente attiva i `<script>` a mano per un sito.
   Anche da attivati, l'egress di rete resta vincolato.
 - **Isolamento tra torrent**: un torrent non deve poter leggere le risorse di un
