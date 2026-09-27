@@ -16,7 +16,8 @@
  * refuse, and they may change their mind.
  */
 
-import { IdbChunkStore, deleteSite, getSite, listSites, putChunks, putSite, requestPersistence } from './idb.js'
+import { KEEP_IN_MEMORY_BYTES } from './config.js'
+import { IdbChunkStore, deleteSite, getSite, listSites, putChunks, putSite, requestPersistence, usage } from './idb.js'
 
 /** Pieces per IndexedDB transaction: enough to be quick, small enough to not stall. */
 const BATCH = 32
@@ -100,6 +101,41 @@ export async function keep (torrent, onProgress = () => {}) {
     torrentFile: new Uint8Array(torrent.torrentFile),
     savedAt: Date.now()
   })
+}
+
+/**
+ * Why this site cannot be kept here, or null if it can. Asked before the
+ * question, so nobody agrees to keep something and is then refused.
+ *
+ * Two limits, both about the fetch that keeping a partly-read site starts:
+ *  - `memory`: the torrent is held in memory while it downloads (no OPFS here,
+ *    the same test WebTorrent makes) and the site is past KEEP_IN_MEMORY_BYTES;
+ *  - `space`: the browser reports less room than keeping needs — one copy in
+ *    IndexedDB, plus, where the torrent itself sits in OPFS, whatever of it has
+ *    not arrived yet, since that is written to disk first.
+ *
+ * Pure, so the rule can be checked without a gigabyte of torrent.
+ *
+ * @param {{length: number, downloaded: number, done: boolean, inMemory: boolean, free: number|null}} site
+ * @returns {{kind: 'memory'|'space', needed: number, free: number|null}|null}
+ */
+export function keepRefusal ({ length, downloaded, done, inMemory, free }) {
+  if (!done && inMemory && length > KEEP_IN_MEMORY_BYTES) return { kind: 'memory', needed: length, free }
+  const needed = length + (done || inMemory ? 0 : Math.max(0, length - downloaded))
+  if (free !== null && free < needed) return { kind: 'space', needed, free }
+  return null
+}
+
+/** keepRefusal, asked of this browser about this torrent. */
+export async function whyNotKeep (torrent) {
+  const inMemory = !(globalThis.navigator?.storage?.getDirectory &&
+    globalThis.FileSystemFileHandle?.prototype?.createWritable)
+  let free = null
+  try {
+    const { usage: used, quota } = await usage()
+    if (quota) free = quota - used
+  } catch { /* no estimate: the browser will say so itself if it runs out */ }
+  return keepRefusal({ length: torrent.length, downloaded: torrent.downloaded, done: torrent.done, inMemory, free })
 }
 
 /** Select every piece and wait until all of them are here. */
