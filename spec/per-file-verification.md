@@ -90,9 +90,10 @@ For each file, shown in the list:
   the counts. The chip reads the counts, and the dialog reads the map.
 - **Keeping** a site fetches all of it, so it ends at verified or broken with
   no special case, which is the re-check `keep` triggers today.
-- **Steps 1 and 2 need no download** and should run for every signed site,
-  large or small, before anything else. Today they already run first. This
-  change only stops step 3 from being all or nothing.
+- **Steps 1 and 2 need no download** and run for every signed site, large or
+  small, before anything else — including a large site that is not complete,
+  so a file added to it or taken out of it shows as broken at once. This change
+  only stops step 3 from being all or nothing.
 - **`WHOLE_SITE_BYTES` stays** as the size up to which a site is downloaded
   whole. It stops being the size up to which a signature is checked, because
   every size is then checked as far as it has been read.

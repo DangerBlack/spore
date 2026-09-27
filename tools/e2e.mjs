@@ -3886,7 +3886,7 @@ async function checkLargeSitesFetchedAsRead () {
       const { seedTorrent } = await import('/js/swarm.js')
       const { createIdentity, formatSporePub } = await import('/js/identity.js')
       const { manifestEntries, signManifest } = await import('/js/manifest.js')
-      const site = async (name, extra, signed) => {
+      const site = async (name, extra, signed, addedAfterSigning) => {
         const page = new TextEncoder().encode(`<h1>${name}</h1>`)
         const parts = [{ path: 'index.html', bytes: page }, { path: extra.name, bytes: extra.bytes }]
         if (signed) {
@@ -3896,6 +3896,7 @@ async function checkLargeSitesFetchedAsRead () {
           const sig = await signManifest(me.privateKey, { key: me.hex, site: null, entries: await manifestEntries(parts) })
           parts.push({ path: 'spore.sig', bytes: new TextEncoder().encode(sig) })
         }
+        if (addedAfterSigning) parts.push({ path: addedAfterSigning, bytes: new TextEncoder().encode('slipped in') })
         const files = parts.map(part => {
           const file = new File([part.bytes], part.path.split('/').pop())
           file.fullPath = `${name}/${part.path}`
@@ -3906,7 +3907,8 @@ async function checkLargeSitesFetchedAsRead () {
       return {
         small: await site('small-site', { name: 'unread.bin', bytes: new Uint8Array(200_000) }),
         large: await site('large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }, true),
-        toKeep: await site('kept-large-site', { name: 'unread.bin', bytes: new Uint8Array(big) })
+        toKeep: await site('kept-large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }),
+        tampered: await site('tampered-large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }, true, 'added.html')
       }
     }, WHOLE_SITE_BYTES + 2_000_000)
 
@@ -3946,6 +3948,18 @@ async function checkLargeSitesFetchedAsRead () {
     const chip = await reader.$eval('#author', a => a.dataset.state)
     check('a large signed site is not checked unasked — that would fetch it all — and reads as unverified',
       chip === 'unverified' && !large.done, `chip ${chip}, ${large.downloaded} bytes`)
+
+    // A file slipped into a large signed site after signing: the file list is
+    // in the metadata, so that is caught at once, with nothing downloaded.
+    await open(sites.tampered)
+    await reader.waitForFunction(() => ['broken', 'unverified', 'verified'].includes(document.getElementById('author').dataset.state),
+      { timeout: 20_000 }).catch(() => {})
+    await wait(1000)
+    const tamperedState = { chip: await reader.$eval('#author', a => a.dataset.state), ...(await state()) }
+    check('a file added to a large signed site is caught at once, from its file list alone',
+      tamperedState.chip === 'broken' && tamperedState.downloaded < 5_000_000,
+      `chip ${tamperedState.chip}, ${tamperedState.downloaded} bytes`)
+    await open(sites.large)
 
     // Read to the end — the gate fetches the file the page never asked for —
     // the site is all here, and its signature can be checked at no cost.
