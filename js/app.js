@@ -178,8 +178,12 @@ let ready = false
  * @type {Error|null}
  */
 let cannotRun = null
-/** The torrent being kept right now, whose progress keeping reports itself. */
-let keeping = null
+/**
+ * The torrents being kept right now, whose progress keeping reports itself.
+ * A set, not one slot: a reader can start keeping one site, open another and
+ * keep that too, and the first one finishing must not clear the second.
+ */
+const keeping = new Set()
 /**
  * Settles when starting up has finished, whichever way it went. Routing and
  * publishing wait for it: a magnet pasted while the worker was still being
@@ -1311,6 +1315,21 @@ async function verifyContent (torrent, entry, key) {
   // A browser that cannot check a signature has not found a bad one.
   if (!result.ok) return settle({ status: result.unsupported ? 'unverified' : 'broken', reason: result.reason })
 
+  // Whether the torrent's files are exactly the signed ones needs only its
+  // file list, which is in the metadata: nothing to download, so it is asked
+  // of every site, however large, before anything else. A file added to a
+  // large site, or one taken out, shows at once rather than when all of it
+  // has arrived.
+  const present = filePaths(torrent, manifest.root)
+  const extra = unlistedIn(result.manifest, present)
+  if (extra.length > 0) {
+    return settle({ status: 'broken', reason: `${extra[0]} is not covered by the signature` })
+  }
+  const absent = missingFrom(result.manifest, present)
+  if (absent.length > 0) {
+    return settle({ status: 'broken', reason: `${absent[0]} is signed for but missing` })
+  }
+
   // Checking means hashing, and hashing means downloading. Since the digest
   // learned to stream, nothing stops this from pulling a four-gigabyte film off
   // the swarm in the background to fill in a chip — so there is a budget, and
@@ -1335,16 +1354,6 @@ async function verifyContent (torrent, entry, key) {
       status: 'unverified',
       reason: `checking this would download ${formatBytes(weight)} of it`
     })
-  }
-
-  const present = filePaths(torrent, manifest.root)
-  const extra = unlistedIn(result.manifest, present)
-  if (extra.length > 0) {
-    return settle({ status: 'broken', reason: `${extra[0]} is not covered by the signature` })
-  }
-  const absent = missingFrom(result.manifest, present)
-  if (absent.length > 0) {
-    return settle({ status: 'broken', reason: `${absent[0]} is signed for but missing` })
   }
 
   // Every file, not a sample: a signature that covers only what somebody
@@ -1951,7 +1960,7 @@ async function onKeepToggle () {
   // error page.
   const onScreen = () => current?.torrent === torrent
   ui.keep.disabled = true
-  keeping = torrent
+  keeping.add(torrent)
   try {
     await keep(torrent, (done, total, phase) => {
       if (!onScreen()) return
@@ -1966,7 +1975,7 @@ async function onKeepToggle () {
       console.warn(`Spore: keeping ${torrent.name ?? torrent.infoHash} failed after it was left:`, err)
     }
   } finally {
-    keeping = null
+    keeping.delete(torrent)
     if (onScreen()) ui.keep.disabled = false
   }
 }
@@ -2959,7 +2968,7 @@ function watchStats (torrent) {
     ui.peers.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? '' : 's'}`
     // While it is being kept, keeping reports its own progress; this used to
     // overwrite it every second, and the two alternated.
-    if (keeping === torrent) return
+    if (keeping.has(torrent)) return
     // A large site is fetched only as it is read, so a percentage would sit at
     // 3% looking stuck; it says what it is doing instead.
     ui.progress.textContent = torrent.done
