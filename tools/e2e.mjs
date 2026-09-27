@@ -125,6 +125,18 @@ const server = spawn(process.execPath, [
 ], { stdio: 'ignore' })
 const origin = `http://localhost:${port}`
 
+/**
+ * An error and everything it was caused by. Puppeteer's "Waiting failed" is a
+ * wrapper whose only useful content is its `cause`, and printing the stack
+ * alone hid the reason for the suite's one intermittent failure for as long
+ * as it has existed.
+ */
+function describeBreak (err) {
+  const parts = []
+  for (let e = err; e; e = e.cause) parts.push(parts.length ? `caused by: ${e.stack ?? e.message ?? e}` : (e.stack ?? e.message ?? String(e)))
+  return parts.join('\n')
+}
+
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: flag('--headful') ? false : 'new',
@@ -137,7 +149,7 @@ try {
     try {
       await run()
     } catch (err) {
-      console.error('\nThe check itself broke:', err.stack ?? err.message)
+      console.error('\nThe check itself broke:', describeBreak(err))
       results.push({ name: 'suite completed', pass: false })
     }
   }
@@ -146,14 +158,14 @@ try {
     try {
       await runIsolated()
     } catch (err) {
-      console.error('\nThe isolation check itself broke:', err.stack ?? err.message)
+      console.error('\nThe isolation check itself broke:', describeBreak(err))
       results.push({ name: 'isolation suite completed', pass: false })
     }
   }
   if (!flag('--only-isolation')) try {
     await runOlderBrowsers()
   } catch (err) {
-    console.error('\nThe older-browser check itself broke:', err.stack ?? err.message)
+    console.error('\nThe older-browser check itself broke:', describeBreak(err))
     results.push({ name: 'older-browser suite completed', pass: false })
   }
 } finally {
@@ -2188,6 +2200,7 @@ async function checkUpdateOverTheWire () {
   check('a record signed by anyone but the key the reader expects is refused',
     refused.some(r => /different key/.test(r)) && !(await stranger.evaluate(() => window.__seen)),
     JSON.stringify(refused.slice(0, 2)))
+  await closeContexts(publisher, reader, stranger)
 }
 
 /**
@@ -2262,6 +2275,7 @@ async function checkUpdateOffer () {
   check('taking the offer navigates to the signed version',
     (await reader.evaluate(() => location.hash)).includes(published.v2),
     await reader.evaluate(() => location.hash))
+  await closeContexts(publisher, reader)
 }
 
 /**
@@ -2493,6 +2507,7 @@ async function checkPublishingASuccessor () {
   const stillOnBlog = await reader.evaluate(() => location.hash)
   check('a second site under the same key does not replace the first',
     still === detail && stillOnBlog.includes(v1), `${still.slice(0, 60)} | ${stillOnBlog.slice(0, 30)}`)
+  await closeContexts(publisher, reader)
 }
 
 /**
@@ -2715,6 +2730,11 @@ async function checkReadersPassItOn () {
 async function checkKeptSiteHearsUpdates () {
   const publisher = await browser.createBrowserContext().then(c => c.newPage())
   const reader = await browser.createBrowserContext().then(c => c.newPage())
+  // Keeping asks with a native confirm(), which blocks the page until it is
+  // answered. The question itself is checkKeepingOffline's business; here it
+  // is answered in the page, so no modal sits between the click and the wait
+  // below. See the note there.
+  await reader.evaluateOnNewDocument(() => { window.confirm = () => true })
   reader.on('dialog', d => d.accept())
 
   for (const page of [publisher, reader]) {
@@ -2765,15 +2785,15 @@ async function checkKeptSiteHearsUpdates () {
   await reader.waitForFunction(
     () => !document.getElementById('viewer').hidden, { timeout: 30_000 })
   await reader.click('#keep-toggle')
-  // The suite's one intermittent failure lives here, roughly one run in six,
-  // always this line. Not a timeout: puppeteer reports "Waiting failed" with no
-  // duration, which is a terminated execution context rather than an expired
-  // one — the page goes away underneath the wait. Raising the timeout did not
-  // stop it, which is the evidence for that reading. Keeping writes a whole
-  // torrent to IndexedDB in about the tenth browser context of a run, and
-  // another context is holding a seventy-megabyte film at the same time, so a
-  // renderer under memory pressure is the obvious suspect and is not yet a
-  // demonstrated one. Written down rather than explained away.
+  // The suite's one intermittent failure lived here, always this line. What
+  // is now known, from the cause puppeteer's "Waiting failed" wraps (the suite
+  // prints it since): a protocol timeout. The page did not answer for thirty
+  // seconds after the click, so its main thread was held, not gone.
+  // What changed: earlier checks left fifteen pages and twenty-three browser
+  // contexts open, seeding, by the time this ran, and now close theirs
+  // (closeContexts); and the native confirm() that keeping asks — a modal that
+  // holds exactly that thread — is answered in the page above. Which of the two
+  // held it is not demonstrated; the failure has not come back since both.
   await reader.waitForFunction(
     () => !document.getElementById('kept').hidden, { timeout: 120_000 })
 
@@ -3191,6 +3211,7 @@ async function checkSlowSwarm () {
   }
   check('and gets the site once a peer that has it turns up', loaded,
     loaded ? '' : await reader.$eval('#status', el => el.textContent))
+  await closeContexts(publisher, useless, reader)
 }
 
 /**
@@ -3273,6 +3294,7 @@ async function checkRememberedKey () {
   await wait(1500)
   check('forgetting it actually forgets it',
     await page.$eval('#signed-in', el => el.hidden))
+  await closeContexts(page)
 }
 
 
@@ -3591,7 +3613,10 @@ async function checkPagesInsideASite (page, infoHash) {
     stepped === steps + 1, `${steps} → ${stepped}`)
 
   await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=gone.html`)
-  await page.waitForFunction(() => !document.getElementById('notice').hidden, { timeout: 20_000 }).catch(() => {})
+  // For this notice, by its words: another can pass through the same element
+  // on the way, and waiting for "a notice" caught that one.
+  await page.waitForFunction(() => document.getElementById('notice').textContent.includes('gone.html') &&
+    !document.getElementById('notice').hidden, { timeout: 20_000 }).catch(() => {})
   const missing = await page.evaluate(() => ({
     src: document.getElementById('viewer').src,
     notice: document.getElementById('notice').textContent
@@ -3647,6 +3672,16 @@ async function checkPagesInsideASite (page, infoHash) {
 
   await page.evaluate(() => { location.hash = '' })
   await wait(500)
+}
+
+/**
+ * Close the browser contexts these pages were opened in, and the pages with
+ * them. Checks that left theirs open had fifteen gate pages seeding and
+ * holding memory by the time `checkKeptSiteHearsUpdates` ran, which is where
+ * the suite's intermittent failure lived.
+ */
+async function closeContexts (...pages) {
+  for (const page of pages) await page.browserContext().close().catch(() => {})
 }
 
 /** A site whose links go everywhere a link can go, seeded from `page`. */
