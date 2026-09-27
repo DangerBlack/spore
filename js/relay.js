@@ -183,7 +183,11 @@ function show (src, { scripts, sandbox }) {
     // torrent's own file list, so a site that lies here names another of its
     // own pages and nothing else.
     const prefix = new URL(`./${TORRENT_PATH}/${location.hostname.split('.')[0]}/`, location.href).href
-    if (here.startsWith(prefix)) parent.postMessage({ spore: RELAY.page, path: here.slice(prefix.length) }, isolation.gate)
+    // Named by this relay's address, so the gate can tell a late report from a
+    // relay it has already replaced from one about the page on screen.
+    if (here.startsWith(prefix)) {
+      parent.postMessage({ spore: RELAY.page, relay: location.href, path: here.slice(prefix.length) }, isolation.gate)
+    }
   })
 
   frame.src = src

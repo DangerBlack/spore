@@ -3530,6 +3530,13 @@ async function checkPagesInsideASite (page, infoHash) {
   const magnet = `magnet:?xt=urn:btih:${infoHash}`
   const { parseSiteRef } = await import('../js/magnet.js')
   const parse = link => { try { return parseSiteRef(link).page } catch (err) { return err.message } }
+
+  // A tracker whose URL has its own query string: naming a page must keep it,
+  // and everything after it.
+  const { withPage } = await import('../js/magnet.js')
+  const queried = withPage(`${magnet}&tr=wss://t.example/announce?key=1&tr=wss://u.example`, 'about.html')
+  check('naming a page keeps a tracker URL that has a query string of its own',
+    queried.includes('announce?key=1&tr=wss://u.example') && parse(queried) === 'about.html', queried.slice(-70))
   const viewerSrc = () => page.$eval('#viewer', f => f.src)
 
   await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=about.html`)
@@ -3587,6 +3594,15 @@ async function checkPagesInsideASite (page, infoHash) {
   }))
   check('a page the site does not have opens its home page, and says why',
     /\/index\.html$/.test(missing.src) && missing.notice.includes('gone.html'), missing.notice.slice(0, 80))
+  const fellBack = await page.evaluate(() => decodeURIComponent(location.hash))
+  check('and the address names the home page it opened, not the missing one',
+    !fellBack.includes('gone.html'), fellBack.slice(-40))
+
+  // Moving on to a page that does exist takes the notice about the missing one away.
+  await (await siteFrame(page)).evaluate(() => document.querySelector('a[href="about.html"]').click())
+  await page.waitForFunction(() => location.hash.includes('x.sp=about.html'), { timeout: 10_000 }).catch(() => {})
+  check('and the notice goes once the reader moves on to another page',
+    await page.$eval('#notice', n => n.hidden), await page.$eval('#notice', n => n.textContent.slice(0, 60)))
 
   await page.evaluate(h => { location.hash = h }, `${magnet}&x.sp=`)
   await page.waitForFunction(() => !document.getElementById('error').hidden, { timeout: 10_000 }).catch(() => {})
@@ -3992,6 +4008,18 @@ async function runIsolated () {
     await page.waitForFunction(() => /index\.html/.test(new URL(document.getElementById('viewer').src).searchParams.get('path') ?? ''),
       { timeout: 20_000 })
     await siteFrame(page)
+
+    // A report from a relay the frame no longer holds — the previous page's,
+    // arriving late — must not move the address. Sent from the current relay's
+    // window, which passes the gate's source check, naming another relay.
+    const current = page.frames().find(f => f.url().includes('/relay.html'))
+    await current.evaluate(g => parent.postMessage({
+      spore: 'relay/page', relay: location.href.replace('index.html', 'about.html'), path: 'example-site/about.html'
+    }, g), gate)
+    await wait(1000)
+    const unmoved = await page.evaluate(() => decodeURIComponent(location.hash))
+    check('isolation: a late page report from a relay already replaced does not move the address',
+      !unmoved.includes('x.sp='), unmoved.slice(-40))
 
     // --- scripts on: the boundary this whole mode exists for -----------------
     asked.length = 0

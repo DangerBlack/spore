@@ -62,7 +62,11 @@ export function parseSiteRef (input) {
  * the reader's gate to guess.
  */
 export function withPage (magnetURI, page) {
-  const [head, query = ''] = magnetURI.split('?')
+  // At the first `?` only: a tracker's own URL can carry a query string, and
+  // splitting on every one dropped the rest of the magnet after it.
+  const cut = magnetURI.indexOf('?')
+  const head = cut === -1 ? magnetURI : magnetURI.slice(0, cut)
+  const query = cut === -1 ? '' : magnetURI.slice(cut + 1)
   const kept = query.split('&').filter(pair => pair && !pair.toLowerCase().startsWith(`${PAGE_PARAM}=`))
   if (page) kept.push(`${PAGE_PARAM}=${page.split('/').map(encodeURIComponent).join('/')}`)
   return `${head}?${kept.join('&')}`

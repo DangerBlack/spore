@@ -270,7 +270,12 @@ async function boot () {
         try { from = new URL(report.relay).origin } catch {}
         if (from === contentOrigin(infoHash)) ui.viewer.relayReported(report.relay, report.arrived, report.reason)
       },
-      onPage: followPage
+      // The frame's window outlives each relay in it, so the source check alone
+      // lets a report from the previous page through, late. Only the relay the
+      // frame holds now may move the address.
+      onPage: (infoHash, report) => {
+        if (report?.relay === ui.viewer.frame.src) followPage(infoHash, report.path)
+      }
     })
     // On this origin the frame is readable, so the gate looks for itself.
     // `load` does not bubble, but it does pass the document on the way down,
@@ -430,6 +435,11 @@ async function open (ref) {
     current.page = page ? parsed.page : null
     await render(torrent, entry, page)
     if (parsed.page && !page) {
+      // The address names the page on screen, which is the home page.
+      current.missingPage = true
+      current.ref = withPage(parsed.magnetURI, null)
+      history.replaceState(null, '', `#${current.ref}`)
+      ui.address.value = current.ref
       ui.notice.textContent =
         `This site has no page “${parsed.page}”, so this is its home page. ` +
         'The link may be for a different version of the site.'
@@ -596,6 +606,11 @@ function followPage (infoHash, path) {
   if (!file.startsWith(root) || !pageIn(current.torrent, current.entry, file.slice(root.length))) return
 
   const page = file === current.entry ? null : file.slice(root.length)
+  // The page the reader has moved to is not the one the link was missing.
+  if (current.missingPage && page !== null) {
+    current.missingPage = false
+    ui.notice.hidden = true
+  }
   if (page === current.page) return
   current.page = page
   current.ref = withPage(current.magnetURI, page)
