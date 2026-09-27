@@ -140,7 +140,12 @@ function describeBreak (err) {
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: flag('--headful') ? false : 'new',
-  protocolTimeout: 30_000,
+  // Above the longest wait in this file (120 s). A waitForFunction is one
+  // protocol call that lasts until its condition holds, so at 30 s every wait
+  // declared longer was silently cut to 30 — which is what the suite's one
+  // intermittent failure turned out to be: keeping a site outlasting 30 s on
+  // a slow runner, inside a wait that said 120.
+  protocolTimeout: 150_000,
   args: ['--no-sandbox', '--disable-dev-shm-usage']
 })
 
@@ -2730,11 +2735,6 @@ async function checkReadersPassItOn () {
 async function checkKeptSiteHearsUpdates () {
   const publisher = await browser.createBrowserContext().then(c => c.newPage())
   const reader = await browser.createBrowserContext().then(c => c.newPage())
-  // Keeping asks with a native confirm(), which blocks the page until it is
-  // answered. The question itself is checkKeepingOffline's business; here it
-  // is answered in the page, so no modal sits between the click and the wait
-  // below. See the note there.
-  await reader.evaluateOnNewDocument(() => { window.confirm = () => true })
   reader.on('dialog', d => d.accept())
 
   for (const page of [publisher, reader]) {
@@ -2785,15 +2785,15 @@ async function checkKeptSiteHearsUpdates () {
   await reader.waitForFunction(
     () => !document.getElementById('viewer').hidden, { timeout: 30_000 })
   await reader.click('#keep-toggle')
-  // The suite's one intermittent failure lived here, always this line. What
-  // is now known, from the cause puppeteer's "Waiting failed" wraps (the suite
-  // prints it since): a protocol timeout. The page did not answer for thirty
-  // seconds after the click, so its main thread was held, not gone.
-  // What changed: earlier checks left fifteen pages and twenty-three browser
-  // contexts open, seeding, by the time this ran, and now close theirs
-  // (closeContexts); and the native confirm() that keeping asks — a modal that
-  // holds exactly that thread — is answered in the page above. Which of the two
-  // held it is not demonstrated; the failure has not come back since both.
+  // The suite's one intermittent failure lived here, always this line, as
+  // "Waiting failed". Its cause, printed since the suite prints causes, was a
+  // protocol timeout — and a waitForFunction is a single protocol call that
+  // lasts until its condition holds. So this 120-second wait had only ever had
+  // the 30 seconds protocolTimeout allowed, and keeping took longer than that
+  // on a loaded runner. Reproduced on an idle page with a condition that
+  // simply comes true late. protocolTimeout is now above every wait here.
+  // Earlier checks also left fifteen gate pages seeding by the time this ran,
+  // which is what made the runner slow enough; they close theirs now.
   await reader.waitForFunction(
     () => !document.getElementById('kept').hidden, { timeout: 120_000 })
 
