@@ -3999,25 +3999,58 @@ async function checkLargeSitesFetchedAsRead () {
       JSON.stringify(refused).slice(0, 140))
     await reader.evaluate(() => { StorageManager.prototype.estimate = window.__estimate })
 
-    // Keeping it is asking for all of it — and while it runs, the status bar
-    // shows keeping's progress, not the reading figure written over it.
+    // Keeping it is asking for all of it. The reader is slowed down so that
+    // keeping lasts long enough to watch it, and to leave it running.
+    const cdp = await reader.createCDPSession()
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 8 })
+    const keptHash = /btih:([0-9a-f]{40})/.exec(sites.toKeep)[1]
+    const keptState = () => reader.evaluate(async h => {
+      const { getClient } = await import('/js/swarm.js')
+      const { keptSites } = await import('/js/keep.js')
+      const torrent = await getClient().get(h)
+      return { done: !!torrent?.done, kept: (await keptSites()).some(site => site.infoHash === h) }
+    }, keptHash)
     await reader.click('#keep-toggle')
-    let kept = false
+
+    // While it runs on its own site, the status bar shows keeping's progress,
+    // not the reading figure written over it.
     const shown = new Set()
-    for (let waited = 0; waited < 120_000 && !kept; waited += 250) {
+    let sawKeeping = 0
+    for (let waited = 0; waited < 60_000 && sawKeeping < 10; waited += 250) {
       await wait(250)
       const progress = await reader.$eval('#progress', p => p.textContent).catch(() => '')
       // From the first sign of keeping on: before it starts, the reading figure
       // is still the right thing to show.
-      if (/fetching to keep|keeping/.test(progress) || shown.size > 0) shown.add(progress.replace(/[\d.]+( ?[kMG]?B)?/g, '#'))
-      kept = await reader.$eval('#kept', el => !el.hidden).catch(() => false)
+      if (/fetching to keep|keeping/.test(progress) || shown.size > 0) {
+        shown.add(progress.replace(/[\d.]+( ?[kMG]?B)?/g, '#'))
+        sawKeeping++
+      }
     }
     check('while a site is being kept, the status bar shows that, not the reading figure over it',
       [...shown].some(text => /fetching to keep/.test(text)) && ![...shown].some(text => /fetched as you read/.test(text)),
       [...shown].join(' | ').slice(0, 140))
-    const after = await state()
-    check('keeping a large site fetches the rest of it, and keeps it',
-      kept && after.done, `kept ${kept}, ${after.downloaded} of ${after.length} bytes`)
+
+    // Then the reader opens another site while it is still being kept: that
+    // site's status bar is its own.
+    const stillKeeping = !(await keptState()).kept
+    await open(sites.small)
+    const elsewhere = new Set()
+    for (let waited = 0; waited < 3000; waited += 250) {
+      await wait(250)
+      elsewhere.add(await reader.$eval('#progress', p => p.textContent).catch(() => ''))
+    }
+    check('and a site opened meanwhile does not show another site\'s keeping in its status bar',
+      stillKeeping && ![...elsewhere].some(text => /keep/.test(text)),
+      `still keeping when left: ${stillKeeping}; shown: ${[...elsewhere].join(' | ').slice(0, 100)}`)
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+
+    let finished = { done: false, kept: false }
+    for (let waited = 0; waited < 120_000 && !finished.kept; waited += 1000) {
+      await wait(1000)
+      finished = await keptState()
+    }
+    check('keeping a large site fetches the rest of it, and keeps it — even after it was left',
+      finished.done && finished.kept, JSON.stringify(finished))
   } finally {
     await closeContexts(publisher, reader)
   }
