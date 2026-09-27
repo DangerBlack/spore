@@ -3720,16 +3720,19 @@ async function checkLinksOutOfASite (page) {
   check('and the site stays where it was', site.url().endsWith('/index.html'), site.url())
   await page.click('#link-stay')
 
-  await site.evaluate(() => document.getElementById('out').click())
-  await wait(300)
-  check('a click the site\'s own script fakes does not ask', await linkDialog(page) === null)
-  // Unasked, the click keeps its old fate: the frame tries to leave, the gate's
-  // policy refuses it, and an error page replaces the site. So, back to it.
-  await page.evaluate(() => { location.hash = '' })
+  const faked = await site.evaluate(() => {
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    document.getElementById('out').dispatchEvent(click)
+    return click.defaultPrevented
+  })
   await wait(500)
-  await page.evaluate(h => { location.hash = h }, hash)
-  await page.waitForFunction(() => /\/index\.html$/.test(document.getElementById('viewer').src), { timeout: 20_000 })
-  site = await siteFrame(page)
+  check('a click the site\'s own script fakes does not ask', await linkDialog(page) === null)
+  // Nor does it go anywhere: cancelled, rather than left to the frame's policy
+  // to refuse, which would have replaced the site with an error page.
+  let stayed = ''
+  try { stayed = await site.evaluate(() => location.href) } catch (err) { stayed = err.message }
+  check('and it is cancelled, so the site stays where it was', faked && stayed.endsWith('/index.html'),
+    `cancelled: ${faked}, at ${stayed.split('/').pop()}`)
 
   await site.click('#inside')
   await page.waitForFunction(() => location.hash.includes('x.sp=two.html'), { timeout: 10_000 }).catch(() => {})
