@@ -136,7 +136,10 @@ export function pageArrived (document, url) {
  */
 export function linkLeaving (event, own) {
   if (event.defaultPrevented || event.button !== 0) return null
-  const anchor = event.target?.closest?.('a, area')
+  // Along the composed path, not from the target: a link inside a shadow root
+  // — which plain HTML can declare, no script needed — reaches the window
+  // retargeted to its host, and `closest` from there never finds it.
+  const anchor = event.composedPath().find(node => node.localName === 'a' || node.localName === 'area')
   if (!anchor) return null
   // An SVG link's href is an SVGAnimatedString, relative until resolved.
   const href = typeof anchor.href === 'string' ? anchor.href : anchor.href?.baseVal
