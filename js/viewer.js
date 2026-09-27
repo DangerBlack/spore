@@ -117,6 +117,14 @@ export function pageArrived (document, url) {
  * already handled (`defaultPrevented`) is left to it — which is why callers
  * listen through `listenLast`, so a site's own handlers always run first.
  *
+ * A click with a modifier — Ctrl, Cmd, Shift, Alt — on an ordinary web link is
+ * the browser's own "open in a new tab" (or window), the keyboard twin of the
+ * middle click, and it is left to the browser exactly as the middle click is.
+ * Asking about one and not the other would protect nobody and break a habit.
+ * A Spore link is the exception: left to the browser it would open in the
+ * operating system's torrent client, or on whatever gate its author wrote,
+ * rather than on the gate the reader chose. Those are still handed back.
+ *
  * @returns {string|null} the absolute URL, or null to let the click be
  */
 export function linkLeaving (event, own) {
@@ -128,7 +136,10 @@ export function linkLeaving (event, own) {
   if (!href) return null
   let url
   try { url = new URL(href, anchor.baseURI) } catch { return null }
-  return url.href.startsWith(own) ? null : url.href
+  if (url.href.startsWith(own)) return null
+  const modified = event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+  const spore = url.protocol === 'magnet:' || /^#magnet(?::|%3a)/i.test(url.hash)
+  return modified && !spore ? null : url.href
 }
 
 /**

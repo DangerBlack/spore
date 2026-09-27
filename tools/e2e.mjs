@@ -3774,6 +3774,33 @@ async function checkLinksOutOfASite (page) {
     svg?.leave?.href === 'https://example.org/svg', JSON.stringify(svg?.leave ?? null))
   await page.click('#link-stay').catch(() => {})
 
+  // Ctrl-click is the browser's own "open in a new tab", like the middle
+  // click: on a web link it is left to the browser, on a Spore link it is not.
+  // Any tab it opens is closed at once; nothing here needs example.org.
+  const closeNewTabs = target => { target.page().then(p => p?.close()).catch(() => {}) }
+  browser.on('targetcreated', closeNewTabs)
+  try {
+    await page.keyboard.down('Control')
+    await site.click('#out')
+    await page.keyboard.up('Control')
+    await wait(300)
+    const modifiedOut = await linkDialog(page)
+    check('a Ctrl-click on a web link is left to the browser, like a middle click',
+      modifiedOut === null && site.url().endsWith('/index.html'), JSON.stringify(modifiedOut))
+
+    await page.keyboard.down('Control')
+    await site.click('#spore')
+    await page.keyboard.up('Control')
+    await wait(300)
+    const modifiedSpore = await linkDialog(page)
+    check('but a Ctrl-click on a Spore link still opens on this gate, not elsewhere',
+      modifiedSpore?.title === 'Open another Spore site?', JSON.stringify(modifiedSpore))
+    await page.click('#link-stay').catch(() => {})
+  } finally {
+    await page.keyboard.up('Control')
+    browser.off('targetcreated', closeNewTabs)
+  }
+
   // A gate URL whose fragment is escaped is still a gate URL.
   await site.click('#gateenc')
   await wait(300)

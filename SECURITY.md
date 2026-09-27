@@ -150,9 +150,14 @@ reports. A site with scripts on shares the relay's origin, so it could post a
 fake report. The most that does is open the dialog, which still needs the
 reader's click.
 
-Middle-click and "open in new tab" belong to the browser, not the page, and
-bypass the question exactly as they did before. The tab they open receives no
-referrer: responses carry `Referrer-Policy: same-origin`.
+Middle-click, Ctrl/Cmd/Shift-click and "open in new tab" belong to the
+browser, not the page. On an ordinary web link they bypass the question
+exactly as the middle click always did, so as not to intercept one form of the
+same request and not the other. The tab they open receives no referrer:
+responses carry `Referrer-Policy: same-origin`. On a link to another Spore
+site a modifier is still intercepted, because the browser would hand it to the
+operating system's torrent client, or open it on the gate its author wrote,
+rather than on this one.
 
 ### WebKit will not serve a sandboxed frame
 
