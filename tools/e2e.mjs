@@ -3853,6 +3853,27 @@ async function checkLargeSitesFetchedAsRead () {
   check('keeping is refused where it cannot be done — too big to hold in memory, or no room — and only there',
     wrong.length === 0, wrong.join('; ') || `${cases.length} cases`)
 
+  // Keep pressed between a site's metadata and its pieces being laid out: the
+  // whole range is selected once there is one, not (0, -1) straight away.
+  const { fetchWhole } = await import('../js/keep.js')
+  const { EventEmitter } = await import('node:events')
+  const early = Object.assign(new EventEmitter(), {
+    ready: false, done: false, progress: 0, pieces: [], selected: [],
+    select (from, to) { this.selected.push([from, to]) }
+  })
+  const fetched = fetchWhole(early)
+  await wait(50)
+  const beforeReady = early.selected.slice()
+  early.pieces = [1, 2, 3]
+  early.ready = true
+  early.emit('ready')
+  early.done = true
+  early.emit('done')
+  const settledEarly = await Promise.race([fetched.then(() => true), wait(1000).then(() => false)])
+  check('keeping, pressed before a site\'s pieces are laid out, selects all of them once they are',
+    beforeReady.length === 0 && JSON.stringify(early.selected) === '[[0,2]]' && settledEarly,
+    `before ready ${JSON.stringify(beforeReady)}, then ${JSON.stringify(early.selected)}, settled ${settledEarly}`)
+
   const publisher = await browser.createBrowserContext().then(c => c.newPage())
   const reader = await browser.createBrowserContext().then(c => c.newPage())
   try {
@@ -3884,7 +3905,8 @@ async function checkLargeSitesFetchedAsRead () {
       }
       return {
         small: await site('small-site', { name: 'unread.bin', bytes: new Uint8Array(200_000) }),
-        large: await site('large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }, true)
+        large: await site('large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }, true),
+        toKeep: await site('kept-large-site', { name: 'unread.bin', bytes: new Uint8Array(big) })
       }
     }, WHOLE_SITE_BYTES + 2_000_000)
 
@@ -3925,6 +3947,22 @@ async function checkLargeSitesFetchedAsRead () {
     check('a large signed site is not checked unasked — that would fetch it all — and reads as unverified',
       chip === 'unverified' && !large.done, `chip ${chip}, ${large.downloaded} bytes`)
 
+    // Read to the end — the gate fetches the file the page never asked for —
+    // the site is all here, and its signature can be checked at no cost.
+    await reader.evaluate(async magnet => {
+      const hash = /btih:([0-9a-f]{40})/.exec(magnet)[1]
+      await (await fetch(`/webtorrent/${hash}/large-site/unread.bin`)).arrayBuffer()
+    }, sites.large)
+    await reader.waitForFunction(() => document.getElementById('author').dataset.state === 'verified', { timeout: 60_000 })
+      .catch(() => {})
+    const readThrough = { chip: await reader.$eval('#author', a => a.dataset.state), done: (await state()).done }
+    check('a large signed site read to the end is checked then, without being kept',
+      readThrough.chip === 'verified' && readThrough.done, JSON.stringify(readThrough))
+
+    // Keeping, on a large site nobody has read to the end.
+    await open(sites.toKeep)
+    await wait(2000)
+
     // Asked with no room to keep it: told why before any question, and nothing
     // is fetched.
     reader.on('dialog', d => d.accept())
@@ -3954,11 +3992,6 @@ async function checkLargeSitesFetchedAsRead () {
     const after = await state()
     check('keeping a large site fetches the rest of it, and keeps it',
       kept && after.done, `kept ${kept}, ${after.downloaded} of ${after.length} bytes`)
-    await reader.waitForFunction(() => document.getElementById('author').dataset.state === 'verified', { timeout: 30_000 })
-      .catch(() => {})
-    const chipAfter = await reader.$eval('#author', a => a.dataset.state)
-    check('and now that all of it is here, its signature is checked',
-      chipAfter === 'verified', chipAfter)
   } finally {
     await closeContexts(publisher, reader)
   }
