@@ -1453,18 +1453,10 @@ async function checkAnArchiveTooBigToHold () {
   check('a file too large for one buffer is streamed, not refused or blamed',
     verdicts.hasNoCap && verdicts.neverAccuses, JSON.stringify(verdicts))
 
-  // And the cost of that: since the digest learned to stream, nothing stopped
-  // verification from pulling a four-gigabyte film off the swarm in the
-  // background to fill in a chip. A weak check, structural rather than
-  // behavioural, because building a torrent past the budget costs more than the
-  // check is worth — but it fails if the budget is ever taken out again.
-  const budgeted = await page.evaluate(async () => {
-    const source = await (await fetch('/js/app.js')).text()
-    const from = source.indexOf('async function verifyContent')
-    return source.slice(from, from + source.slice(from).indexOf('\n}\n'))
-      .includes('VERIFY_WITHOUT_ASKING_BYTES')
-  })
-  check('and checking a signature has a bandwidth budget of its own', budgeted)
+  // The cost of that — verification pulling a whole large site off the swarm
+  // to fill in a chip — is checked for real, not by reading the source, in
+  // checkLargeSitesFetchedAsRead: a signed site past WHOLE_SITE_BYTES stays
+  // fetched as it is read, and reads as unverified.
 
   await page.close()
 }
@@ -3838,6 +3830,11 @@ async function checkOtherWorkerRefusals () {
  * sites here carry a file their page never asks for: the small site's arrives
  * anyway, the large site's does not — and the status bar says why the large
  * one is not at 100%, instead of looking stuck.
+ *
+ * The large site is signed. Checking a signature means hashing every file, so
+ * it must not be checked unasked — that would fetch it all in the background —
+ * and it reads as unverified instead. Keeping it is asking for all of it: it
+ * is fetched, then kept, where keeping once refused anything unfinished.
  */
 async function checkLargeSitesFetchedAsRead () {
   const { WHOLE_SITE_BYTES } = await import('../js/config.js')
@@ -3851,15 +3848,28 @@ async function checkLargeSitesFetchedAsRead () {
     }
     const sites = await publisher.evaluate(async big => {
       const { seedTorrent } = await import('/js/swarm.js')
-      const site = async (name, extra) => {
-        const files = [new File([`<h1>${name}</h1>`], 'index.html', { type: 'text/html' }), extra]
-        files[0].fullPath = `${name}/index.html`
-        files[1].fullPath = `${name}/${extra.name}`
+      const { createIdentity, formatSporePub } = await import('/js/identity.js')
+      const { manifestEntries, signManifest } = await import('/js/manifest.js')
+      const site = async (name, extra, signed) => {
+        const page = new TextEncoder().encode(`<h1>${name}</h1>`)
+        const parts = [{ path: 'index.html', bytes: page }, { path: extra.name, bytes: extra.bytes }]
+        if (signed) {
+          const me = await createIdentity()
+          const pub = new TextEncoder().encode(formatSporePub(me.hex, 'Large Author', null))
+          parts.push({ path: 'spore.pub', bytes: pub })
+          const sig = await signManifest(me.privateKey, { key: me.hex, site: null, entries: await manifestEntries(parts) })
+          parts.push({ path: 'spore.sig', bytes: new TextEncoder().encode(sig) })
+        }
+        const files = parts.map(part => {
+          const file = new File([part.bytes], part.path.split('/').pop())
+          file.fullPath = `${name}/${part.path}`
+          return file
+        })
         return (await seedTorrent(files, { name })).magnetURI
       }
       return {
-        small: await site('small-site', new File([new Uint8Array(200_000)], 'unread.bin')),
-        large: await site('large-site', new File([new Uint8Array(big)], 'unread.bin'))
+        small: await site('small-site', { name: 'unread.bin', bytes: new Uint8Array(200_000) }),
+        large: await site('large-site', { name: 'unread.bin', bytes: new Uint8Array(big) }, true)
       }
     }, WHOLE_SITE_BYTES + 2_000_000)
 
@@ -3896,6 +3906,21 @@ async function checkLargeSitesFetchedAsRead () {
       !large.done && large.downloaded < 5_000_000, `${large.downloaded} of ${large.length} bytes`)
     check('and the status bar says so rather than showing a stuck percentage',
       large.progress.includes('fetched as you read'), large.progress)
+    const chip = await reader.$eval('#author', a => a.dataset.state)
+    check('a large signed site is not checked unasked — that would fetch it all — and reads as unverified',
+      chip === 'unverified' && !large.done, `chip ${chip}, ${large.downloaded} bytes`)
+
+    // Keeping it is asking for all of it.
+    reader.on('dialog', d => d.accept())
+    await reader.click('#keep-toggle')
+    let kept = false
+    for (let waited = 0; waited < 120_000 && !kept; waited += 1000) {
+      await wait(1000)
+      kept = await reader.$eval('#kept', el => !el.hidden).catch(() => false)
+    }
+    const after = await state()
+    check('keeping a large site fetches the rest of it, and keeps it',
+      kept && after.done, `kept ${kept}, ${after.downloaded} of ${after.length} bytes`)
   } finally {
     await closeContexts(publisher, reader)
   }

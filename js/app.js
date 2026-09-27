@@ -9,7 +9,7 @@
 // First, before anything that loads WebTorrent: modules are evaluated in the
 // order they are imported, and the bundle needs these on older browsers.
 import './polyfills.js'
-import { TORRENT_PATH, VERIFY_WITHOUT_ASKING_BYTES } from './config.js'
+import { TORRENT_PATH, WHOLE_SITE_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
 import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
@@ -1323,7 +1323,7 @@ async function verifyContent (torrent, entry, key) {
     .filter(file => file.path.replace(/\\/g, '/').startsWith(manifest.root))
     .reduce((total, file) => total + file.length, 0)
 
-  if (weight > VERIFY_WITHOUT_ASKING_BYTES) {
+  if (weight > WHOLE_SITE_BYTES) {
     return settle({
       status: 'unverified',
       reason: `checking this would download ${formatBytes(weight)} of it`
@@ -1909,15 +1909,18 @@ async function onKeepToggle () {
     return
   }
 
-  if (!confirm(KEEP_WARNING)) {
+  // A site fetched as it is read is only partly here; keeping it fetches the
+  // rest, and the size of that belongs in the question, not after it.
+  const fetching = torrent.done ? '' : `This downloads all of it first: ${formatBytes(torrent.length)}.\n\n`
+  if (!confirm(fetching + KEEP_WARNING)) {
     ui.keep.checked = false
     return
   }
 
   ui.keep.disabled = true
   try {
-    await keep(torrent, (done, total) => {
-      ui.progress.textContent = `keeping ${Math.round((done / total) * 100)}%`
+    await keep(torrent, (done, total, phase) => {
+      ui.progress.textContent = `${phase === 'fetching' ? 'fetching to keep' : 'keeping'} ${Math.round((done / total) * 100)}%`
     })
     await refreshKeptList()
   } catch (err) {

@@ -109,21 +109,6 @@ export const EXPECTED_WORKER_VERSION = '2026-09-25.3'
 export const GATE_VERSION = '2026-09-27.3'
 
 /**
- * How much a reader will pull off the swarm to check a signature unasked.
- *
- * Verifying means hashing every file the manifest covers, and hashing means
- * downloading. Until the streaming digest existed a large file simply threw and
- * the check stopped; now it succeeds — so opening a signed torrent that holds a
- * four-gigabyte film to read its one-page index would quietly fetch the whole
- * film in the background, to fill in a chip saying who wrote the page.
- *
- * Above this the site reads as unverified with the size said out loud. It ought
- * to *ask* rather than decline — that is the rule for every threshold here, and
- * the number is known before the cost is paid — and that work is not done.
- */
-export const VERIFY_WITHOUT_ASKING_BYTES = 256_000_000
-
-/**
  * The largest site a reader downloads whole just by opening it.
  *
  * Up to this, opening a site fetches all of it, as it always has: every reader
@@ -133,6 +118,13 @@ export const VERIFY_WITHOUT_ASKING_BYTES = 256_000_000
  * many files, costs what is looked at rather than what exists. Such a reader
  * seeds only the pieces they have, so a large site still needs somebody
  * holding all of it: its publisher, a seeder, or a reader who keeps it.
+ *
+ * It is also as much as checking a signature fetches unasked. Checking means
+ * hashing every file the signature covers, and hashing means downloading; a
+ * site fetched as it is read must not be pulled down whole in the background
+ * to fill in a chip saying who wrote the page. Above this a signed site reads
+ * as unverified, with the size said out loud, until the reader has all of it —
+ * by keeping it, for one.
  */
 export const WHOLE_SITE_BYTES = 50_000_000
 
