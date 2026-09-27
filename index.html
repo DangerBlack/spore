@@ -507,6 +507,26 @@
   </div>
 </dialog>
 
+<!--
+  A link out of the site the reader is on. The way out is a real link, clicked
+  here, rather than window.open() after a confirm(): a popup blocker counts the
+  reader's click, and a reader who takes a few seconds to decide would otherwise
+  find the tab silently blocked. No referrer, no opener.
+-->
+<dialog id="link-dialog">
+  <div class="dialog-head">
+    <h2 id="link-title">Leave Spore?</h2>
+  </div>
+  <p id="link-what"></p>
+  <p class="link-url"><code id="link-url"></code></p>
+  <p id="link-risk" class="muted small"></p>
+  <div class="dialog-actions">
+    <button id="link-stay" type="button" class="link">Stay here</button>
+    <a id="link-leave" class="button" target="_blank" rel="noopener noreferrer" hidden>Open</a>
+    <button id="link-open" type="button" hidden>Open it</button>
+  </div>
+</dialog>
+
 <dialog id="diagnostics">
   <div class="dialog-head">
     <h2>Diagnostics</h2>

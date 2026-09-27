@@ -42,7 +42,7 @@ import { watchForUpdates } from './updates.js'
 import {
   author, forgetAuthor, knownSeq, petname, rememberAuthor, rememberVersion, setPetname
 } from './authors.js'
-import { Viewer, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
+import { Viewer, linkLeaving, probeSandbox, relayReport, sandboxWorks } from './viewer.js'
 
 const el = id => document.getElementById(id)
 
@@ -68,6 +68,14 @@ const ui = {
   shareIntro: el('share-intro'),
   shareNote: el('share-note'),
   shareOpen: el('share-open'),
+  linkDialog: el('link-dialog'),
+  linkTitle: el('link-title'),
+  linkWhat: el('link-what'),
+  linkURL: el('link-url'),
+  linkRisk: el('link-risk'),
+  linkStay: el('link-stay'),
+  linkLeave: el('link-leave'),
+  linkOpen: el('link-open'),
   shareSuccessor: el('share-successor'),
   shareUnsigned: el('share-unsigned'),
   shareLink: el('share-link'),
@@ -225,6 +233,9 @@ async function boot () {
   ui.authorDialog.addEventListener('close', onAuthorClose)
   ui.authorForget.addEventListener('click', onForgetAuthor)
   ui.shareOpen.addEventListener('click', onShare)
+  ui.linkStay.addEventListener('click', () => ui.linkDialog.close())
+  // The link opens its tab on its own; the dialog only has to get out of the way.
+  ui.linkLeave.addEventListener('click', () => ui.linkDialog.close())
   ui.saveTorrent.addEventListener('click', onSaveTorrent)
   ui.diagnose.addEventListener('click', showDiagnostics)
   ui.diagnosticsClose.addEventListener('click', () => ui.diagnostics.close())
@@ -275,6 +286,10 @@ async function boot () {
       // frame holds now may move the address.
       onPage: (infoHash, report) => {
         if (report?.relay === ui.viewer.frame.src) followPage(infoHash, report.path)
+      },
+      onLink: (infoHash, report) => {
+        if (report?.relay === ui.viewer.frame.src && current?.torrent.infoHash === infoHash &&
+          typeof report.href === 'string') offerLink(report.href)
       }
     })
     // On this origin the frame is readable, so the gate looks for itself.
@@ -626,6 +641,93 @@ function onViewerLoad (event) {
   if (!here.startsWith(prefix)) return
   const [infoHash, ...rest] = here.slice(prefix.length).split('/')
   followPage(infoHash, rest.join('/'))
+
+  // A new document on every load, so listened to on every load. The listener
+  // is the gate's own code, so it runs whether or not the site may run any.
+  const own = `${prefix}${infoHash}/`
+  ui.viewer.frame.contentDocument.addEventListener('click', event => {
+    const href = linkLeaving(event, own)
+    if (!href) return
+    event.preventDefault()
+    offerLink(href)
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* Links out of a site                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A reader clicked a link that leaves the site: say where it goes, and ask.
+ *
+ * Two kinds of destination, and neither was reachable before — the sandbox
+ * refused both, silently, and only a middle click got through:
+ *
+ *  - **Another Spore site**: a `magnet:` link, or a gate URL whose fragment
+ *    holds one — any gate's, since the fragment is the site and the gate is
+ *    only a way in. It opens *here*, on the gate the reader chose to trust,
+ *    never on the one the author happened to write.
+ *  - **The ordinary web**: opened in a new tab, by a real link the reader
+ *    clicks in the dialog, with no referrer and no opener.
+ *
+ * Asking is what keeps the egress rule intact. That rule is about what a site
+ * makes the browser load *without* the reader deciding — an image, a font, a
+ * redirect — which is still refused. A click the reader confirms, knowing
+ * that the destination will see their address, is a visit, not a leak.
+ *
+ * Anything else — a same-origin page outside the torrent, a `javascript:` or
+ * `mailto:` link — is refused as before, by doing nothing.
+ */
+function offerLink (href) {
+  if (ui.linkDialog.open) return
+
+  let url
+  try { url = new URL(href) } catch { return }
+
+  let site = null
+  if (url.protocol === 'magnet:' || url.hash) {
+    try { site = parseSiteRef(url.href) } catch { site = null }
+  }
+  if (site) return askToOpenSite(url, site)
+  if ((url.protocol === 'https:' || url.protocol === 'http:') && url.origin !== location.origin) askToLeave(url)
+}
+
+function askToLeave (url) {
+  ui.linkTitle.textContent = 'Leave Spore?'
+  ui.linkWhat.textContent = `This link goes to ${url.host}, an ordinary website outside the swarm.`
+  ui.linkRisk.textContent =
+    `It opens in a new tab. ${url.host} will see your IP address, as any website you visit does. ` +
+    'It is not told which Spore site you came from: no referrer is sent.'
+  showLinkDialog(url.href)
+  ui.linkLeave.href = url.href
+  ui.linkLeave.textContent = `Open ${url.host}`
+  ui.linkLeave.hidden = false
+}
+
+function askToOpenSite (url, site) {
+  const name = /[?&]dn=([^&]*)/.exec(site.magnetURI)?.[1]
+  let label = site.infoHash ? site.infoHash.slice(0, 12) + '…' : 'a site'
+  try { if (name) label = `“${decodeURIComponent(name.replace(/\+/g, ' '))}”` } catch {}
+
+  ui.linkTitle.textContent = 'Open another Spore site?'
+  ui.linkWhat.textContent = `This link opens ${label}, a different site from the one you are reading.`
+  ui.linkRisk.textContent =
+    'It opens here, on this gate. Like every site you open, its other readers — and anyone ' +
+    'watching its swarm — can see your IP address, and your tab seeds it while it is open.'
+  showLinkDialog(url.href)
+  ui.linkOpen.hidden = false
+  ui.linkOpen.onclick = () => {
+    ui.linkDialog.close()
+    navigate(site.source)
+  }
+}
+
+function showLinkDialog (href) {
+  ui.linkURL.textContent = href
+  ui.linkLeave.hidden = true
+  ui.linkOpen.hidden = true
+  ui.linkDialog.showModal()
+  ui.linkStay.focus()
 }
 
 async function render (torrent, entry, page = null) {

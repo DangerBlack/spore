@@ -182,6 +182,15 @@ mirror. The page has to be one of the site's own files. A link to a page the
 site does not have opens its home page and says so, and a path that climbs out
 of the site (`..`) is refused.
 
+### Links out of a site
+
+Links to the ordinary web work: a click asks first, names where it goes and
+says that site will see your IP address, then opens it in a new tab with no
+referrer. A link to another Spore site — a `magnet:`, or a link through any
+gate — asks too, and opens on the gate you are using, not the one the author
+wrote. Images, fonts and other things a page loads by itself still never leave
+the torrent; see [SECURITY.md](SECURITY.md).
+
 ## Updating a site
 
 A magnet is the hash of its content, so editing a site gives it a new address.

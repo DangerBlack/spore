@@ -102,6 +102,33 @@ export function pageArrived (document, url) {
 }
 
 /**
+ * The address a click is taking the reader to, if it leaves the site.
+ *
+ * One rule for both viewers, like `pageArrived`: the gate asks it of clicks in
+ * its own frame, and relay.js of clicks in the site's frame on the content
+ * origin. The site's own links — anything under `own`, the torrent's prefix —
+ * are left alone and navigate as they always have. Anything else is handed
+ * back so the gate can say where it goes and ask, instead of the sandbox
+ * silently refusing it.
+ *
+ * Only a real click by the reader counts. With scripts on, a site can call
+ * `.click()` on its own links; that is not the reader choosing to leave, so it
+ * gets the old behaviour, which is nothing. A click a site's own script has
+ * already handled (`defaultPrevented`) is left to it.
+ *
+ * @returns {string|null} the absolute URL, or null to let the click be
+ */
+export function linkLeaving (event, own) {
+  if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return null
+  const anchor = event.target?.closest?.('a[href], area[href]')
+  // An SVG link's href is not a string; it keeps the old behaviour.
+  if (!anchor || typeof anchor.href !== 'string') return null
+  let url
+  try { url = new URL(anchor.href) } catch { return null }
+  return url.href.startsWith(own) ? null : url.href
+}
+
+/**
  * Ask the worker for a page from inside a sandboxed frame, and see if it
  * arrives. Runs once, on a hidden frame, and settles before any site is shown.
  */
