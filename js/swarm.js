@@ -43,9 +43,7 @@ let client = null
  * @returns {Promise<ServiceWorkerRegistration>}
  */
 export async function startWorker () {
-  if (!('serviceWorker' in navigator)) {
-    throw new Error('This browser has no service workers, so Spore cannot render sites. (HTTPS is required, except on localhost.)')
-  }
+  if (!('serviceWorker' in navigator)) throw new WorkerRefused('unavailable')
 
   let registration
   try {
@@ -63,11 +61,12 @@ export async function startWorker () {
     )
   } catch (err) {
     // Overwhelmingly this is a browser set to block site data, which disables
-    // service workers outright. The message the browser gives is not useful.
-    throw new Error(
-      `Spore could not start its service worker, so it cannot display sites: ${err.message}. ` +
-      'This usually means this browser is blocking cookies and site data for ' +
-      'localhost, or the page is not on HTTPS.')
+    // service workers outright. Measured, the two say it differently: Firefox
+    // throws a SecurityError ("The operation is insecure"); Chrome throws a
+    // NotSupportedError — a name it also uses for other refusals — whose
+    // message says "The user denied permission to use Service Worker".
+    const blocked = err?.name === 'SecurityError' || /denied permission/i.test(err?.message ?? '')
+    throw new WorkerRefused(blocked ? 'blocked' : 'failed', err?.message)
   }
 
   // A stale worker is a classic way to spend an afternoon on a bug that is
@@ -78,6 +77,27 @@ export async function startWorker () {
     await controllerTakesOver(registration)
   }
   return registration
+}
+
+/**
+ * The browser would not run Spore's service worker, so this gate can show
+ * nothing here — not a site, and not a published one.
+ *
+ * One kind of failure for the whole gate rather than one per feature: before
+ * it, the same browser setting surfaced as the worker's own error on one path,
+ * "The swarm client has not been started" on the address bar, and "still
+ * starting up, try again in a moment" when publishing — which it never would.
+ *
+ * `kind` is why: `blocked` (the browser is blocking site data, which a reader
+ * can change), `unavailable` (no service workers at all here: not HTTPS, or a
+ * browser mode without them), or `failed` (anything else, with its message).
+ */
+export class WorkerRefused extends Error {
+  constructor (kind, detail = '') {
+    super(detail || kind)
+    this.name = 'WorkerRefused'
+    this.kind = kind
+  }
 }
 
 /**
