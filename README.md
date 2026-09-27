@@ -427,8 +427,9 @@ announce that you hold it every time Spore opens rather than only while reading.
 [SECURITY.md](SECURITY.md#keeping-a-site-on-this-device).
 
 This is not the same as always-on availability: a kept site is still only
-reachable while one of your tabs is open. A seeder that runs without a browser
-is a later phase.
+reachable while one of your tabs is open. For a site that stays up with no
+browser open at all, run the seeder — see
+[Seeding from a server](#seeding-from-a-server).
 
 Keeping a site does not cost you the ability to pass it on. The list links to
 the magnet the site was kept with — trackers and all — and **Share** in the
@@ -480,15 +481,22 @@ current one.
 - **Not anonymity.** Peers in a swarm see each other's IP addresses. Spore
   protects *content* from being taken down; it does not hide who publishes or
   reads it. Do not use it as if it did.
-- **Not persistent yet.** Browser peers only reach other WebRTC peers, and
-  seeding stops when the tab closes. Close every tab that has a site open and it
-  goes dormant until someone with a copy seeds it again. Always-on seeding is a
-  later phase.
-- **Not updatable yet.** A magnet addresses fixed bytes, so editing a site
-  changes its address. A design for fixing that without introducing a host is
-  drafted in [spec/mutable-sites.md](spec/mutable-sites.md) — signed
-  successors delivered peer to peer, reusing BEP 44's record unchanged. It is
-  a draft, not an implementation.
+- **Not persistent by itself.** A site is up only while somebody seeds it.
+  Browser peers reach only other WebRTC peers, and a tab stops seeding when it
+  closes: close every tab that has a site open and it goes dormant until
+  someone with a copy opens it again. For a site that has to stay up, run the
+  seeder on a machine that stays on — see
+  [Seeding from a server](#seeding-from-a-server).
+- **Not self-updating.** A magnet addresses fixed bytes, so an edited site is a
+  new address. A signed site can offer its readers the newer version — see
+  [Updating a site](#updating-a-site) — and they choose whether to follow it.
+  An unsigned site stays exactly as it was published.
+- **Not in search engines, and no link previews.** Crawlers and preview bots
+  neither run the gate nor join a swarm, and the site is named in the URL
+  fragment, which never reaches a server. That is the same property that keeps
+  the gate's host from learning what you read, so it is not going to change.
+  A publisher who wants to be found can also put a copy on an ordinary host,
+  with the Spore link as the one that cannot be taken down.
 
 ## Checking it still works
 

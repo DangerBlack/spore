@@ -137,9 +137,9 @@ Costruito comunque, su richiesta esplicita, fuori dal perimetro MVP originale
 
 ## Definition of Done (MVP)
 
-- [ ] Apro `https://gate/#<magnet>` e vedo il sito con tutte le sue risorse.
-- [ ] Address bar interna: incollo un magnet e navigo senza ricaricare il gate.
-- [ ] Trascino una cartella → ottengo magnet + link condivisibile → il sito è
+- [x] Apro `https://gate/#<magnet>` e vedo il sito con tutte le sue risorse.
+- [x] Address bar interna: incollo un magnet e navigo senza ricaricare il gate.
+- [x] Trascino una cartella → ottengo magnet + link condivisibile → il sito è
       raggiungibile da un altro browser mentre tengo la tab aperta.
-- [ ] Di default niente script e niente egress esterno; script attivabili per-sito.
-- [ ] Il gate è un bundle statico che gira identico da un secondo mirror.
+- [x] Di default niente script e niente egress esterno; script attivabili per-sito.
+- [x] Il gate è un bundle statico che gira identico da un secondo mirror.
