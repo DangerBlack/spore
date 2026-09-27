@@ -3963,11 +3963,28 @@ async function checkLargeSitesFetchedAsRead () {
     await open(sites.toKeep)
     await wait(2000)
 
-    // Asked with no room to keep it: told why before any question, and nothing
-    // is fetched.
-    reader.on('dialog', d => d.accept())
+    // Changed their mind while the browser was still being asked for its
+    // storage estimate: no question afterwards, and nothing kept.
+    const questions = []
+    reader.on('dialog', d => { questions.push(d.message().slice(0, 40)); d.accept() })
     await reader.evaluate(() => {
       window.__estimate = StorageManager.prototype.estimate
+      StorageManager.prototype.estimate = function () {
+        return new Promise(resolve => setTimeout(() => resolve(window.__estimate.call(this)), 1500))
+      }
+    })
+    await reader.click('#keep-toggle')
+    await wait(300)
+    await reader.click('#keep-toggle')
+    await wait(2500)
+    const changedMind = { questions: questions.length, checked: await reader.$eval('#keep-toggle', t => t.checked), done: (await state()).done }
+    check('unticking Keep while the browser is still asked for room leaves no question and nothing kept',
+      changedMind.questions === 0 && !changedMind.checked && !changedMind.done, JSON.stringify(changedMind))
+    await reader.evaluate(() => { StorageManager.prototype.estimate = window.__estimate })
+
+    // Asked with no room to keep it: told why before any question, and nothing
+    // is fetched.
+    await reader.evaluate(() => {
       StorageManager.prototype.estimate = async () => ({ usage: 0, quota: 1_000_000 })
     })
     await reader.click('#keep-toggle')
