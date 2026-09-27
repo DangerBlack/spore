@@ -129,6 +129,19 @@ export const GATE_VERSION = '2026-09-27.3'
 export const WHOLE_SITE_BYTES = 50_000_000
 
 /**
+ * The largest site this gate will fetch whole, to keep it, where the torrent
+ * being fetched is held in memory until it is written to IndexedDB.
+ *
+ * WebTorrent keeps a torrent's pieces in the browser's private file system
+ * (OPFS) where it can, and in memory where it cannot — Safari before 26 and
+ * Firefox before 111, both inside Spore's supported range. There, keeping a
+ * site of several gigabytes would run the tab out of memory before the first
+ * byte was stored. A judgment rather than a measurement: well inside what a
+ * phone gives one tab, and far above any site that opens whole anyway.
+ */
+export const KEEP_IN_MEMORY_BYTES = 500_000_000
+
+/**
  * What a .zip may be.
  *
  * There is no limit on how large a published site may be, and there must not

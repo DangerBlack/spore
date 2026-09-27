@@ -12,7 +12,7 @@ import './polyfills.js'
 import { TORRENT_PATH, WHOLE_SITE_BYTES } from './config.js'
 import { collectDiagnostics, resetBrowserState } from './diagnostics.js'
 import { openDatabase, usage } from './idb.js'
-import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne } from './keep.js'
+import { KEEP_WARNING, forget, isKept, keep, keptSites, restoreAll, restoreOne, whyNotKeep } from './keep.js'
 import { InvalidSiteRef, decodeFragment, magnetFor, parseSiteRef, webSeedHosts, withPage } from './magnet.js'
 import { scriptsAllowed, servePolicyQueries, setScriptsAllowed } from './policy.js'
 import {
@@ -1909,6 +1909,22 @@ async function onKeepToggle () {
     return
   }
 
+  // Before the question: agreeing to keep something and then being refused
+  // is worse than being told at once why it cannot be done here.
+  const refusal = await whyNotKeep(torrent)
+  if (refusal) {
+    ui.keep.checked = false
+    ui.notice.textContent = refusal.kind === 'memory'
+      ? `This site is ${formatBytes(torrent.length)}, too large to keep in this browser: it holds a ` +
+        'site in memory while downloading it, and fetching all of this could run the tab out of ' +
+        'memory. A current Chrome or Firefox can keep it, and so can a seeder.'
+      : `Keeping this site needs about ${formatBytes(refusal.needed)} of storage, and this browser ` +
+        `reports ${formatBytes(refusal.free)} free.`
+    ui.notice.className = 'notice'
+    ui.notice.hidden = false
+    return
+  }
+
   // A site fetched as it is read is only partly here; keeping it fetches the
   // rest, and the size of that belongs in the question, not after it.
   const fetching = torrent.done ? '' : `This downloads all of it first: ${formatBytes(torrent.length)}.\n\n`
@@ -1923,6 +1939,12 @@ async function onKeepToggle () {
       ui.progress.textContent = `${phase === 'fetching' ? 'fetching to keep' : 'keeping'} ${Math.round((done / total) * 100)}%`
     })
     await refreshKeptList()
+    // All of it is here now, so a signature that was too costly to check
+    // unasked can be checked — the chip said "until the reader has all of it".
+    if (current?.torrent === torrent && authorship?.key && authorship.verified?.status === 'unverified') {
+      authorship.verified = null
+      verifyContent(torrent, current.entry, authorship.key)
+    }
   } catch (err) {
     ui.keep.checked = false
     fail(err)

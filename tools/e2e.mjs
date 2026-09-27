@@ -3837,7 +3837,22 @@ async function checkOtherWorkerRefusals () {
  * is fetched, then kept, where keeping once refused anything unfinished.
  */
 async function checkLargeSitesFetchedAsRead () {
-  const { WHOLE_SITE_BYTES } = await import('../js/config.js')
+  const { WHOLE_SITE_BYTES, KEEP_IN_MEMORY_BYTES } = await import('../js/config.js')
+
+  // The rule for when keeping is refused, on its own: no gigabyte torrent needed.
+  const { keepRefusal } = await import('../js/keep.js')
+  const big = KEEP_IN_MEMORY_BYTES * 4
+  const cases = [
+    ['a partly-read site past the cap, held in memory', { length: big, downloaded: 0, done: false, inMemory: true, free: big * 10 }, 'memory'],
+    ['the same site where the torrent sits in OPFS, with room', { length: big, downloaded: 0, done: false, inMemory: false, free: big * 10 }, null],
+    ['the same, with room for one copy but not the two it needs', { length: big, downloaded: 0, done: false, inMemory: false, free: big * 1.5 }, 'space'],
+    ['a complete site, with room for its one copy', { length: big, downloaded: big, done: true, inMemory: true, free: big * 1.5 }, null],
+    ['no estimate from the browser', { length: big, downloaded: 0, done: false, inMemory: false, free: null }, null]
+  ]
+  const wrong = cases.filter(([, site, kind]) => (keepRefusal(site)?.kind ?? null) !== kind).map(([label]) => label)
+  check('keeping is refused where it cannot be done — too big to hold in memory, or no room — and only there',
+    wrong.length === 0, wrong.join('; ') || `${cases.length} cases`)
+
   const publisher = await browser.createBrowserContext().then(c => c.newPage())
   const reader = await browser.createBrowserContext().then(c => c.newPage())
   try {
@@ -3910,8 +3925,26 @@ async function checkLargeSitesFetchedAsRead () {
     check('a large signed site is not checked unasked — that would fetch it all — and reads as unverified',
       chip === 'unverified' && !large.done, `chip ${chip}, ${large.downloaded} bytes`)
 
-    // Keeping it is asking for all of it.
+    // Asked with no room to keep it: told why before any question, and nothing
+    // is fetched.
     reader.on('dialog', d => d.accept())
+    await reader.evaluate(() => {
+      window.__estimate = StorageManager.prototype.estimate
+      StorageManager.prototype.estimate = async () => ({ usage: 0, quota: 1_000_000 })
+    })
+    await reader.click('#keep-toggle')
+    await wait(3000)
+    const refused = {
+      notice: await reader.$eval('#notice', n => n.hidden ? '' : n.textContent),
+      checked: await reader.$eval('#keep-toggle', t => t.checked),
+      done: (await state()).done
+    }
+    check('with no room to keep it, the reader is told so first, and nothing is fetched',
+      /needs about .* of storage/.test(refused.notice) && !refused.checked && !refused.done,
+      JSON.stringify(refused).slice(0, 140))
+    await reader.evaluate(() => { StorageManager.prototype.estimate = window.__estimate })
+
+    // Keeping it is asking for all of it.
     await reader.click('#keep-toggle')
     let kept = false
     for (let waited = 0; waited < 120_000 && !kept; waited += 1000) {
@@ -3921,6 +3954,11 @@ async function checkLargeSitesFetchedAsRead () {
     const after = await state()
     check('keeping a large site fetches the rest of it, and keeps it',
       kept && after.done, `kept ${kept}, ${after.downloaded} of ${after.length} bytes`)
+    await reader.waitForFunction(() => document.getElementById('author').dataset.state === 'verified', { timeout: 30_000 })
+      .catch(() => {})
+    const chipAfter = await reader.$eval('#author', a => a.dataset.state)
+    check('and now that all of it is here, its signature is checked',
+      chipAfter === 'verified', chipAfter)
   } finally {
     await closeContexts(publisher, reader)
   }
