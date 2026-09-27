@@ -178,6 +178,8 @@ let ready = false
  * @type {Error|null}
  */
 let cannotRun = null
+/** The torrent being kept right now, whose progress keeping reports itself. */
+let keeping = null
 /**
  * Settles when starting up has finished, whichever way it went. Routing and
  * publishing wait for it: a magnet pasted while the worker was still being
@@ -1939,6 +1941,7 @@ async function onKeepToggle () {
   }
 
   ui.keep.disabled = true
+  keeping = torrent
   try {
     await keep(torrent, (done, total, phase) => {
       ui.progress.textContent = `${phase === 'fetching' ? 'fetching to keep' : 'keeping'} ${Math.round((done / total) * 100)}%`
@@ -1948,6 +1951,7 @@ async function onKeepToggle () {
     ui.keep.checked = false
     fail(err)
   } finally {
+    keeping = null
     ui.keep.disabled = false
   }
 }
@@ -2938,6 +2942,9 @@ function watchStats (torrent) {
   stopStats()
   const tick = () => {
     ui.peers.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? '' : 's'}`
+    // While it is being kept, keeping reports its own progress; this used to
+    // overwrite it every second, and the two alternated.
+    if (keeping === torrent) return
     // A large site is fetched only as it is read, so a percentage would sit at
     // 3% looking stuck; it says what it is doing instead.
     ui.progress.textContent = torrent.done

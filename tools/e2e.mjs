@@ -3982,13 +3982,22 @@ async function checkLargeSitesFetchedAsRead () {
       JSON.stringify(refused).slice(0, 140))
     await reader.evaluate(() => { StorageManager.prototype.estimate = window.__estimate })
 
-    // Keeping it is asking for all of it.
+    // Keeping it is asking for all of it — and while it runs, the status bar
+    // shows keeping's progress, not the reading figure written over it.
     await reader.click('#keep-toggle')
     let kept = false
-    for (let waited = 0; waited < 120_000 && !kept; waited += 1000) {
-      await wait(1000)
+    const shown = new Set()
+    for (let waited = 0; waited < 120_000 && !kept; waited += 250) {
+      await wait(250)
+      const progress = await reader.$eval('#progress', p => p.textContent).catch(() => '')
+      // From the first sign of keeping on: before it starts, the reading figure
+      // is still the right thing to show.
+      if (/fetching to keep|keeping/.test(progress) || shown.size > 0) shown.add(progress.replace(/[\d.]+( ?[kMG]?B)?/g, '#'))
       kept = await reader.$eval('#kept', el => !el.hidden).catch(() => false)
     }
+    check('while a site is being kept, the status bar shows that, not the reading figure over it',
+      [...shown].some(text => /fetching to keep/.test(text)) && ![...shown].some(text => /fetched as you read/.test(text)),
+      [...shown].join(' | ').slice(0, 140))
     const after = await state()
     check('keeping a large site fetches the rest of it, and keeps it',
       kept && after.done, `kept ${kept}, ${after.downloaded} of ${after.length} bytes`)
