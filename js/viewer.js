@@ -112,10 +112,17 @@ export function pageArrived (document, url) {
  * silently refusing it.
  *
  * Only a real click by the reader counts. With scripts on, a site can call
- * `.click()` on its own links; that is not the reader choosing to leave, so it
- * gets the old behaviour, which is nothing. A click a site's own script has
- * already handled (`defaultPrevented`) is left to it — which is why callers
- * listen through `listenLast`, so a site's own handlers always run first.
+ * `.click()` on a link; that is not the reader choosing to leave, so it is not
+ * asked about — and, if the link leaves the site, it is cancelled here, the one
+ * side effect of this function. Left alone it would be refused anyway (by the
+ * gate's `frame-src` for the web, by the sandbox for a torrent client), but it
+ * would replace the site with an error page, and that refusal should not rest
+ * on one policy alone. A faked click on one of the site's own links is the
+ * site's business.
+ *
+ * A click a site's own script has already handled (`defaultPrevented`) is
+ * left to it — which is why callers listen through `listenLast`, so a site's
+ * own handlers always run first.
  *
  * A click with a modifier — Ctrl, Cmd, Shift, Alt — on an ordinary web link is
  * the browser's own "open in a new tab" (or window), the keyboard twin of the
@@ -128,7 +135,7 @@ export function pageArrived (document, url) {
  * @returns {string|null} the absolute URL, or null to let the click be
  */
 export function linkLeaving (event, own) {
-  if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return null
+  if (event.defaultPrevented || event.button !== 0) return null
   const anchor = event.target?.closest?.('a, area')
   if (!anchor) return null
   // An SVG link's href is an SVGAnimatedString, relative until resolved.
@@ -137,6 +144,10 @@ export function linkLeaving (event, own) {
   let url
   try { url = new URL(href, anchor.baseURI) } catch { return null }
   if (url.href.startsWith(own)) return null
+  if (!event.isTrusted) {
+    event.preventDefault()
+    return null
+  }
   const modified = event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
   const spore = url.protocol === 'magnet:' || /^#magnet(?::|%3a)/i.test(url.hash)
   return modified && !spore ? null : url.href
