@@ -3662,6 +3662,7 @@ async function seedLinkSite (page) {
       <p><a id="routed" href="https://example.org/routed">handled by the site</a></p>
       <p><a id="late" href="https://example.org/late">handled by a handler added later</a></p>
       <p><a id="gateenc" href="https://another-gate.example/#magnet%3A?xt=urn:btih:${viaGate}&dn=Encoded">escaped gate link</a></p>
+      <p><a id="gatelet" href="https://another-gate.example/#%6Dagnet:?xt=urn:btih:${viaGate}&dn=Letters">letter-escaped gate link</a></p>
       <script>
         // A site's own router, on the window, as a single-page app would have it.
         addEventListener('click', e => {
@@ -3678,6 +3679,17 @@ async function seedLinkSite (page) {
     const { seedTorrent } = await import('/js/swarm.js')
     return (await seedTorrent([index, two], { name: 'links' })).infoHash
   }, OTHER_SITE, VIA_GATE)
+}
+
+/**
+ * Close the link dialog the way a reader would, and make sure it closed: a
+ * dialog left open is modal, and every click after it would fail for a reason
+ * that has nothing to do with the check it lands in.
+ */
+async function closeLinkDialog (page) {
+  if (!(await page.$eval('#link-dialog', d => d.open))) return
+  await page.click('#link-stay')
+  await page.waitForFunction(() => !document.getElementById('link-dialog').open, { timeout: 5000 })
 }
 
 /** What the link dialog says, or null when it is not open. */
@@ -3718,7 +3730,7 @@ async function checkLinksOutOfASite (page) {
     out?.leave?.href === 'https://example.org/page?q=1' && out.leave.target === '_blank' &&
     /noopener/.test(out.leave.rel) && /noreferrer/.test(out.leave.rel), JSON.stringify(out?.leave))
   check('and the site stays where it was', site.url().endsWith('/index.html'), site.url())
-  await page.click('#link-stay')
+  await closeLinkDialog(page)
 
   const faked = await site.evaluate(() => {
     const click = new MouseEvent('click', { bubbles: true, cancelable: true })
@@ -3775,7 +3787,7 @@ async function checkLinksOutOfASite (page) {
   const svg = await linkDialog(page)
   check('an outside link inside an SVG asks like any other',
     svg?.leave?.href === 'https://example.org/svg', JSON.stringify(svg?.leave ?? null))
-  await page.click('#link-stay').catch(() => {})
+  await closeLinkDialog(page)
 
   // Ctrl-click is the browser's own "open in a new tab", like the middle
   // click: on a web link it is left to the browser, on a Spore link it is not.
@@ -3798,7 +3810,17 @@ async function checkLinksOutOfASite (page) {
     const modifiedSpore = await linkDialog(page)
     check('but a Ctrl-click on a Spore link still opens on this gate, not elsewhere',
       modifiedSpore?.title === 'Open another Spore site?', JSON.stringify(modifiedSpore))
-    await page.click('#link-stay').catch(() => {})
+    await closeLinkDialog(page)
+
+    // Both halves agree on what a Spore link is, however its fragment is escaped.
+    await page.keyboard.down('Control')
+    await site.click('#gatelet')
+    await page.keyboard.up('Control')
+    await wait(300)
+    const letters = await linkDialog(page)
+    check('a gate link escaped letter by letter is a Spore link to both halves of the rule',
+      letters?.title === 'Open another Spore site?' && letters.what.includes('Letters'), JSON.stringify(letters))
+    await closeLinkDialog(page)
   } finally {
     await page.keyboard.up('Control')
     browser.off('targetcreated', closeNewTabs)
@@ -3810,7 +3832,7 @@ async function checkLinksOutOfASite (page) {
   const escapedGate = await linkDialog(page)
   check('a gate link with an escaped fragment is still a Spore link',
     escapedGate?.title === 'Open another Spore site?' && escapedGate.what.includes('Encoded'), escapedGate?.title)
-  await page.click('#link-stay').catch(() => {})
+  await closeLinkDialog(page)
 
   // A web address whose fragment merely looks like an infohash is the web.
   await page.evaluate(() => { location.hash = '' })
@@ -3823,7 +3845,7 @@ async function checkLinksOutOfASite (page) {
   const hexfrag = await linkDialog(page)
   check('a web link whose fragment looks like an infohash is treated as the web, not as Spore',
     hexfrag?.title === 'Leave Spore?', hexfrag?.title)
-  await page.click('#link-stay').catch(() => {})
+  await closeLinkDialog(page)
 
   // With scripts on, a site that handles a link itself is left to do so.
   await page.evaluate(h => {
@@ -3847,7 +3869,7 @@ async function checkLinksOutOfASite (page) {
   const late = { dialog: await linkDialog(page), title: await site.evaluate(() => document.title) }
   check('and so is one whose handler the site added after the page had loaded',
     late.dialog === null && late.title === 'late', JSON.stringify(late).slice(0, 100))
-  await page.click('#link-stay').catch(() => {})
+  await closeLinkDialog(page)
 
   await page.evaluate(() => { location.hash = '' })
   await wait(500)
@@ -4239,7 +4261,7 @@ async function runIsolated () {
     const isoOut = await linkDialog(page)
     check('isolation: an outside link clicked in the site asks on the gate',
       isoOut?.leave?.href === 'https://example.org/page?q=1', JSON.stringify(isoOut))
-    await page.click('#link-stay').catch(() => {})
+    await closeLinkDialog(page)
 
     // A report from a relay the frame no longer holds is not a click.
     const relayNow = page.frames().find(f => f.url().includes('/relay.html'))
