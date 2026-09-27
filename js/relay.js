@@ -190,8 +190,9 @@ function show (src, { scripts, sandbox }) {
     if (here.startsWith(prefix)) {
       parent.postMessage({ spore: RELAY.page, relay: location.href, path: here.slice(prefix.length) }, isolation.gate)
     }
-    // A new document on every load, so listened to on every load.
-    frame.contentDocument?.addEventListener('click', event => {
+    // A new window on every load, so listened to on every load. On the window,
+    // after load, so the site's own handlers run first — see `linkLeaving`.
+    frame.contentWindow?.addEventListener('click', event => {
       const href = linkLeaving(event, prefix)
       if (!href) return
       event.preventDefault()

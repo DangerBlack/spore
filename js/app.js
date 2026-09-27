@@ -642,10 +642,11 @@ function onViewerLoad (event) {
   const [infoHash, ...rest] = here.slice(prefix.length).split('/')
   followPage(infoHash, rest.join('/'))
 
-  // A new document on every load, so listened to on every load. The listener
-  // is the gate's own code, so it runs whether or not the site may run any.
+  // A new window on every load, so listened to on every load. The listener is
+  // the gate's own code, so it runs whether or not the site may run any; on
+  // the window, after load, so the site's own handlers run first.
   const own = `${prefix}${infoHash}/`
-  ui.viewer.frame.contentDocument.addEventListener('click', event => {
+  ui.viewer.frame.contentWindow.addEventListener('click', event => {
     const href = linkLeaving(event, own)
     if (!href) return
     event.preventDefault()
@@ -684,8 +685,11 @@ function offerLink (href) {
   let url
   try { url = new URL(href) } catch { return }
 
+  // A web address counts as a Spore link only when its fragment is a magnet —
+  // what every gate's Share produces. A bare 40-hex fragment is also a git
+  // commit, and 32 letters can be an ordinary anchor: those are the web.
   let site = null
-  if (url.protocol === 'magnet:' || url.hash) {
+  if (url.protocol === 'magnet:' || url.hash.startsWith('#magnet:')) {
     try { site = parseSiteRef(url.href) } catch { site = null }
   }
   if (site) return askToOpenSite(url, site)
