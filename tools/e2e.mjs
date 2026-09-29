@@ -4157,6 +4157,13 @@ async function closeLinkDialog (page) {
     }
     document.getElementById('link-dialog').addEventListener('close', () => window.__opens.push({ closed: Math.round(performance.now()) }))
   })
+  // Two frames first. With content isolation the site's frame is another
+  // process, and the browser routes a click by hit-test data that trails the
+  // screen by a frame or so: clicked the instant the dialog appeared, the
+  // click went to the frame beneath it. Seen in CI, and told apart from a
+  // reopened dialog by the report below (nothing reopened; focus still in the
+  // frame; the button in view). No reader clicks within a frame of it opening.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   await page.click('#link-stay')
   try {
     await page.waitForFunction(() => !document.getElementById('link-dialog').open, { timeout: 5000 })
