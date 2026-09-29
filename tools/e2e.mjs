@@ -2712,8 +2712,9 @@ async function checkReadersPassItOn () {
       hash: location.hash.slice(0, 30)
     })).then(JSON.stringify))
 
-  await first.close()
-  await second.close()
+  // The contexts, not only the pages: see closeContexts. The publisher's page
+  // is already closed; its context is not.
+  await closeContexts(publisher, first, second)
 }
 
 /**
