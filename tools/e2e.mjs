@@ -443,6 +443,7 @@ async function run () {
   await checkAnArchiveTooBigToHold()
   await checkSurvivesDeadStorage(page)
   await checkSiteDataBlocked()
+  await checkWhatTheGateLoads()
   await checkOtherWorkerRefusals()
   await checkStuckViewerIsDetected(page)
   await checkUncontrolledPageRecovers(page)
@@ -3747,6 +3748,39 @@ async function checkSiteDataBlocked () {
 }
 
 /**
+ * What the gate actually fetches, watched from the browser rather than read
+ * from the source: whatever the mechanism — a quote style the static walk does
+ * not know, a stylesheet's @import, a font — every file the gate's own origin
+ * serves it must be one the release signs. Sites' files, under /webtorrent/,
+ * are the swarm's and verified against their infohash instead.
+ */
+async function checkWhatTheGateLoads () {
+  const { gateFiles } = await import('./release-sums.mjs')
+  const signed = new Set(await gateFiles())
+  const page = await browser.createBrowserContext().then(c => c.newPage())
+  const fetched = new Set()
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.origin !== origin || url.pathname.startsWith('/webtorrent/')) return
+    // Asked for by the browser itself, for the tab, with no page naming it; an
+    // icon runs nothing, and a host serving a different one gains nothing.
+    if (url.pathname === '/favicon.ico') return
+    fetched.add(url.pathname === '/' ? 'index.html' : url.pathname.slice(1))
+  })
+  try {
+    await page.goto(origin + '/', { waitUntil: 'load' })
+    await page.waitForFunction(() => document.getElementById('status').textContent === 'Nothing open', { timeout: 30_000 })
+    await wait(1000)
+  } finally {
+    await closeContexts(page)
+  }
+  const unsigned = [...fetched].filter(path => !signed.has(path))
+  check('everything the gate fetches from its own origin is a file the release signs',
+    fetched.size > 5 && unsigned.length === 0,
+    unsigned.length ? `fetched but not signed: ${unsigned.join(' ')}` : `${fetched.size} files fetched, all signed`)
+}
+
+/**
  * The other ways a worker can be refused, and the race that used to hide the
  * reason. Each in a context of its own, with the service worker API altered
  * before the gate's code runs:
@@ -4529,9 +4563,17 @@ async function runIsolated () {
   const follow = path => {
     if (loaded.has(path)) return
     loaded.add(path)
-    if (!path.endsWith('.js')) return
     const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
     const base = new URL(`file:///gate/${path}`)
+    const resolve = ref => new URL(ref, base).pathname.replace(/^\/gate\//, '')
+    // A stylesheet loads too: @import, and url() for fonts and images.
+    if (path.endsWith('.css')) {
+      for (const [, , ref] of source.matchAll(/(?:@import\s+(?:url\()?|url\()\s*(['"]?)([^'")\s]+)\1/g)) {
+        if (!/^(?:data:|https?:|#)/.test(ref)) follow(resolve(ref))
+      }
+      return
+    }
+    if (!path.endsWith('.js')) return
     // Every way a module brings in another: import, a bare import for its
     // effect, a dynamic import, and a re-export — which the browser fetches and
     // runs just the same.
@@ -4546,7 +4588,15 @@ async function runIsolated () {
   for (const page of ['index.html', 'relay.html']) {
     loaded.add(page)
     const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
-    for (const [, ref] of html.matchAll(/(?:src|href)="(?!about:|https?:|#)([^"]+)"/g)) follow(ref)
+    // What loads: src on the elements that fetch it, href on <link> only —
+    // an <a href> is somewhere a reader may go, not something the page runs.
+    // Either quote, or none, with the whitespace HTML allows around the =.
+    for (const [, tag, attributes] of html.matchAll(/<([a-z][\w-]*)\b([^>]*)>/gi)) {
+      const name = tag.toLowerCase() === 'link' ? 'href' : 'src'
+      const found = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>'"]+))`, 'i').exec(attributes)
+      const ref = found && (found[1] ?? found[2] ?? found[3])
+      if (ref && !/^(?:about:|https?:|data:|blob:|#)/.test(ref)) follow(ref)
+    }
   }
   const unlisted = [...loaded].filter(path => !listed.has(path))
   const unloaded = [...listed].filter(path => !loaded.has(path))
@@ -4583,6 +4633,13 @@ async function runIsolated () {
   const page = await browser.newPage()
   const asked = []
   page.on('dialog', async dialog => { asked.push(dialog.message()); await dialog.accept() })
+  // What the content origin serves the relay, for the signed-files check below.
+  const relayFetched = new Set()
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (!url.hostname.endsWith(content.split(':')[0]) || url.pathname.startsWith('/webtorrent/')) return
+    relayFetched.add(url.pathname.slice(1))
+  })
 
   try {
     await wait(500)
@@ -4615,6 +4672,14 @@ async function runIsolated () {
       viewer.src.startsWith(`${siteOrigin}/relay.html?`), viewer.src)
     check('isolation: the relay is sandboxed with only what it needs',
       viewer.sandbox === 'allow-same-origin allow-scripts', viewer.sandbox)
+    {
+      const { gateFiles } = await import('./release-sums.mjs')
+      const signed = new Set(await gateFiles())
+      const unsigned = [...relayFetched].filter(path => !signed.has(path))
+      check('isolation: everything a content origin serves the relay is a file the release signs',
+        relayFetched.has('relay.html') && unsigned.length === 0,
+        unsigned.length ? `fetched but not signed: ${unsigned.join(' ')}` : `${[...relayFetched].sort().join(' ')}`)
+    }
 
     const site = await siteFrame(page)
     const rendered = await site.evaluate(() => ({
