@@ -4519,6 +4519,39 @@ async function runIsolated () {
     [...needed].every(n => allowed.has(n)) && [...allowed].every(n => needed.has(n)),
     `imports ${[...needed].sort().join(' ')} / allowed ${[...allowed].sort().join(' ')}`)
 
+  // What a release signs is what a browser runs. The list tools/release-sums.mjs
+  // signs must be exactly the files the gate's pages load, followed through
+  // every import — a module added and not listed would run unsigned, and a
+  // mirror serving a changed copy of it would still pass verification.
+  const { gateFiles } = await import('./release-sums.mjs')
+  const listed = new Set(await gateFiles())
+  const loaded = new Set()
+  const follow = path => {
+    if (loaded.has(path)) return
+    loaded.add(path)
+    if (!path.endsWith('.js')) return
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
+    const base = new URL(`file:///gate/${path}`)
+    const specifiers = [
+      ...source.matchAll(/(?:^|\n)\s*import\s+(?:[^'";]*?\sfrom\s*)?['"](\.{1,2}\/[^'"]+)['"]/g),
+      ...source.matchAll(/\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)
+    ].map(match => match[1])
+    for (const specifier of specifiers) follow(new URL(specifier, base).pathname.replace(/^\/gate\//, ''))
+  }
+  follow('sw.js')
+  for (const page of ['index.html', 'relay.html']) {
+    loaded.add(page)
+    const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
+    for (const [, ref] of html.matchAll(/(?:src|href)="(?!about:|https?:|#)([^"]+)"/g)) follow(ref)
+  }
+  const unlisted = [...loaded].filter(path => !listed.has(path))
+  const unloaded = [...listed].filter(path => !loaded.has(path))
+  check('a signed release lists exactly the files the gate loads',
+    unlisted.length === 0 && unloaded.length === 0,
+    unlisted.length || unloaded.length
+      ? `loaded but not signed: ${unlisted.join(' ') || 'none'}; signed but never loaded: ${unloaded.join(' ') || 'none'}`
+      : `${listed.size} files`)
+
   const isoPort = await freePort()
   const gate = `http://spore.localhost:${isoPort}`
   const content = `spore-content.localhost:${isoPort}`

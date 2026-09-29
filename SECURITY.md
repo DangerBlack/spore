@@ -24,6 +24,10 @@ is incomplete it is written down as incomplete rather than left implied.
 BitTorrent works. Spore makes content hard to take down. It does not hide who
 published it or who is reading it, and it must never be described as if it did.
 
+**The gate you load.** Every protection below is code the gate runs, and a
+browser runs whatever the gate's host sends it. See
+[Trusting the gate](#trusting-the-gate).
+
 ## The chokepoint
 
 Everything a site loads is a request to `/webtorrent/<infoHash>/<path>` on the
@@ -417,6 +421,81 @@ What follows from that:
 
 The second origin for content closes this the same way it closes the section
 above, and for the same reason.
+
+## Trusting the gate
+
+The gate is a web page, and it is the code that does everything on this list.
+It reads the magnet from the fragment, draws the site, checks signatures,
+paints the ✓, and signs with a key you let it remember. A gate whose host is
+compromised, or dishonest, can therefore:
+
+- see which sites you open;
+- show you a forged site under a ✓, because the check that would catch it runs
+  in the same code;
+- take a publishing key remembered on the device.
+
+What it cannot do is change a site for anyone else. Pieces are checked against
+the infohash by every peer, so a compromised gate misleads the people who use
+it, and a reader opening the same link from another mirror sees the real site.
+The content does not belong to a gate, which is why any number of them can
+exist.
+
+### Why the browser cannot pin it
+
+The web has no code signing for pages. Every visit runs what the server sends.
+A service worker cannot guard against this either: the browser fetches
+`sw.js` itself, straight from the network, and a worker never sees its own
+update. So pinning the gate's hash in the worker at the first visit (the "TOFU"
+idea in the roadmap) only holds until the host replaces `sw.js`. The version
+Diagnostics shows is reported by the gate about itself, so a dishonest gate can
+report whatever it likes. Nothing inside the page can vouch for the page.
+
+### Trusting it less
+
+**Run your own.** This is the strong answer. Clone the repository, check the
+copy against a signed release (below), and serve it locally:
+
+    git clone https://github.com/DangerBlack/spore && cd spore
+    node tools/serve.mjs 8080        # then open http://localhost:8080
+
+`localhost` is a secure context, so everything works, and the code that runs
+is the code you have on disk.
+
+**Check a mirror against a signed release.** Each release ships
+`release/SHA256SUMS`, the SHA-256 of every file a browser runs, made by
+`tools/release-sums.mjs`. It is signed with the release key, which is held
+offline by the maintainer and never by CI, the way Tor signs its releases: a
+key held where the gate is built would fall with the host it is meant to guard
+against. Checking needs standard tools and none of Spore's:
+
+    GATE=https://some-mirror.example/spore
+    curl -fsSO "$GATE/release/SHA256SUMS" && curl -fsSO "$GATE/release/SHA256SUMS.sig"
+    ssh-keygen -Y verify -f allowed_signers -I spore-release -n spore-gate \
+      -s SHA256SUMS.sig < SHA256SUMS
+    while read -r sum path; do
+      printf '%s  %s\n' "$(curl -fsS "$GATE/$path" | sha256sum | cut -d' ' -f1)" "$path"
+    done < SHA256SUMS | diff - SHA256SUMS && echo 'This mirror serves the signed release.'
+
+`allowed_signers` holds one line, `spore-release` followed by the release
+key's public half. Take that line from somewhere other than the mirror you are
+checking, and other than this repository alone, because whoever controls
+either can change it. The key is published under "Release key" in the README
+and should also be published in places its holder controls independently.
+
+What this proves, and what it does not:
+
+- **It is a spot check.** It shows what the mirror served to `curl` at that
+  moment. A dishonest host can serve the signed files to a checker and
+  different ones to a particular browser or visitor. Only running your own gate
+  from a checked copy closes that.
+- **An old release also passes.** Check that the release is current: its
+  `js/config.js` carries `GATE_VERSION`, compared against the newest release
+  in the repository.
+- **Code newer than the last signed release fails**, by design. A mirror that
+  deploys every merge runs unsigned code between releases, and this says so.
+- **One key, one holder.** Signing is manual and does not scale, which is the
+  point. How that key is governed later (several holders, rotation) is an
+  open decision, not a solved one.
 
 ## Reporting
 
