@@ -532,6 +532,47 @@ are this project's most fragile dependency, and a suite that fails when one of
 them is having a bad afternoon teaches nobody anything. What is exercised —
 real WebRTC between real browser peers — is the same either way.
 
+## Releases and the release key
+
+The gate is code your browser runs, fetched from whoever hosts it, so it can
+be no more trustworthy than that host — unless you can check it. Each release
+lists every file a browser runs, with its SHA-256, in `release/SHA256SUMS`, and
+that list is signed with the release key. With the list and the key you can
+check a mirror, or your own copy, with `ssh-keygen`, `curl` and `sha256sum`
+alone. How, and what that does and does not prove:
+[SECURITY.md, Trusting the gate](SECURITY.md#trusting-the-gate).
+
+### Release key
+
+Not published yet: until it is, no release is signed, and no mirror can be
+checked this way. When it is, it goes here as the one line `allowed_signers`
+needs, and in places its holder controls independently of this repository:
+
+    spore-release ssh-ed25519 <public key>
+
+### Making a release (maintainer)
+
+The key is held offline, on the maintainer's own machine, never in CI — the
+way Tor signs its releases. A key held where the gate is built would fall with
+the host it is meant to guard against.
+
+```sh
+# Once: the key.
+ssh-keygen -t ed25519 -C spore-release -f ~/.ssh/spore-release
+
+# Each release, after bumping GATE_VERSION, on the commit that will be served:
+node tools/release-sums.mjs                 # writes release/SHA256SUMS
+ssh-keygen -Y sign -f ~/.ssh/spore-release -n spore-gate release/SHA256SUMS
+git add release/ && git commit -m "release: sign <GATE_VERSION>"
+```
+
+The list is kept current between releases, not only at them: the test suite
+fails if `release/SHA256SUMS` does not match the gate's files, or does not name
+exactly the files the gate loads. So a change to a gate file comes with
+`node tools/release-sums.mjs`, and a release is then only the signature. A
+signature left over from an older list no longer verifies, which is correct:
+that code is not what was signed.
+
 ## Layout
 
 ```
@@ -562,6 +603,8 @@ vendor/             WebTorrent, committed verbatim (see vendor/README.md)
 tools/serve.mjs     dev server
 tools/e2e.mjs       browser check of both MVP promises and the security model
 tools/seed.mjs      seed a site from a server: signs, versions, health endpoint
+tools/release-sums.mjs  the list of files a release signs (release/SHA256SUMS)
+release/            that list, and its signature once the release key signs it
 spec/               protocol drafts, for anyone writing a second gate
 example-site/       the Spore whitepaper, published through Spore
 ```
