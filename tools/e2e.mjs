@@ -4619,6 +4619,23 @@ async function runIsolated () {
   check('gate code imports only modules it names, never a computed path',
     computed.length === 0, computed.length ? `computed import() in: ${computed.join(' ')}` : 'every import() names its module')
 
+  // And names them relative to itself. A root-relative path would break the
+  // gate under a subpath (a GitHub project page) and the walk would not follow
+  // it; an absolute URL would load code from somewhere nobody signs. Comments
+  // are left out — the JSDoc names types as import('webtorrent').
+  const uncode = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
+  const notRelative = []
+  for (const path of [...listed].filter(p => p.endsWith('.js'))) {
+    const source = uncode(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'))
+    const named = [
+      ...source.matchAll(/(?:^|\n)\s*(?:import|export)\s+(?:[^'";]*?\sfrom\s*)?['"]([^'"]+)['"]/g),
+      ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]/g)
+    ].map(match => match[1])
+    for (const specifier of named) if (!/^\.{1,2}\//.test(specifier)) notRelative.push(`${path}: ${specifier}`)
+  }
+  check('gate code imports modules only by paths relative to itself',
+    notRelative.length === 0, notRelative.length ? notRelative.join(', ') : 'all relative')
+
   const unlisted = [...loaded].filter(path => !listed.has(path))
   const unloaded = [...listed].filter(path => !loaded.has(path))
   check('a signed release lists exactly the files the gate loads',

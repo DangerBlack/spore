@@ -468,7 +468,12 @@ copy against a signed release (below), and serve it locally:
     node tools/serve.mjs 8080        # then open http://localhost:8080
 
 `localhost` is a secure context, so everything works, and the code that runs
-is the code you have on disk.
+is the code you have on disk — provided nothing else is already registered
+there. A service worker left on `localhost:8080` by an older copy, or by any
+other project, would answer the page before the files on disk do. Use a fresh
+browser profile, or clear that origin's site data in the browser's own
+settings first, or pick a port nothing has used. Not Diagnostics' reset: that
+button is part of the page, and a worker already there would serve its own.
 
 **Check a mirror against a signed release.** Each release ships
 `release/SHA256SUMS`, the SHA-256 of every file a browser runs, made by
@@ -511,6 +516,11 @@ and nothing else:
 
     curl -fsS "$GATE/js/config.js" | diff <(git show <release>:js/config.js) -
     curl -fsS "$GATE/index.html"   | diff <(git show <release>:index.html) -
+    curl -fsS "$SITE/js/config.js" | diff <(git show <release>:js/config.js) -
+
+The last line matters as much as the first: the relay reads the `config.js`
+of the content origin it runs on, a separate copy from the gate's, and it can
+differ.
 
 That is weaker than a signature, and it is where an isolated mirror asks for
 more trust than a plain one. Moving a mirror's settings out of signed code —
