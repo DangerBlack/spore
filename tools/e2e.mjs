@@ -4532,9 +4532,13 @@ async function runIsolated () {
     if (!path.endsWith('.js')) return
     const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
     const base = new URL(`file:///gate/${path}`)
+    // Every way a module brings in another: import, a bare import for its
+    // effect, a dynamic import, and a re-export — which the browser fetches and
+    // runs just the same.
     const specifiers = [
       ...source.matchAll(/(?:^|\n)\s*import\s+(?:[^'";]*?\sfrom\s*)?['"](\.{1,2}\/[^'"]+)['"]/g),
-      ...source.matchAll(/\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)
+      ...source.matchAll(/\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g),
+      ...source.matchAll(/(?:^|\n)\s*export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/g)
     ].map(match => match[1])
     for (const specifier of specifiers) follow(new URL(specifier, base).pathname.replace(/^\/gate\//, ''))
   }
@@ -4551,6 +4555,21 @@ async function runIsolated () {
     unlisted.length || unloaded.length
       ? `loaded but not signed: ${unlisted.join(' ') || 'none'}; signed but never loaded: ${unloaded.join(' ') || 'none'}`
       : `${listed.size} files`)
+
+  // And the list committed is the list of these files as they are: what a
+  // reader verifies is release/SHA256SUMS, so a gate file changed without
+  // regenerating it — or a list committed short — must not leave the suite
+  // green. Regenerate with: node tools/release-sums.mjs
+  const { sums } = await import('./release-sums.mjs')
+  let committed = ''
+  try { committed = readFileSync(new URL('../release/SHA256SUMS', import.meta.url), 'utf8') } catch {}
+  const current = await sums()
+  const stale = current.split('\n').filter(line => line && !committed.split('\n').includes(line)).map(line => line.split('  ')[1])
+  const extra = committed.split('\n').filter(line => line && !current.split('\n').includes(line)).map(line => line.split('  ')[1])
+  check('the committed release/SHA256SUMS matches the gate\'s files',
+    committed === current,
+    committed === current ? 'up to date'
+      : `out of date or wrong for: ${[...new Set([...stale, ...extra])].join(' ')} — run node tools/release-sums.mjs`)
 
   const isoPort = await freePort()
   const gate = `http://spore.localhost:${isoPort}`

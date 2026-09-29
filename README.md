@@ -566,9 +566,12 @@ ssh-keygen -Y sign -f ~/.ssh/spore-release -n spore-gate release/SHA256SUMS
 git add release/ && git commit -m "release: sign <GATE_VERSION>"
 ```
 
-`node tools/release-sums.mjs --check` says whether the list still matches the
-files, and the test suite checks that the list names exactly the files the
-gate loads.
+The list is kept current between releases, not only at them: the test suite
+fails if `release/SHA256SUMS` does not match the gate's files, or does not name
+exactly the files the gate loads. So a change to a gate file comes with
+`node tools/release-sums.mjs`, and a release is then only the signature. A
+signature left over from an older list no longer verifies, which is correct:
+that code is not what was signed.
 
 ## Layout
 

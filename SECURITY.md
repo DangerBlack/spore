@@ -432,13 +432,22 @@ compromised, or dishonest, can therefore:
 - see which sites you open;
 - show you a forged site under a ✓, because the check that would catch it runs
   in the same code;
-- take a publishing key remembered on the device.
+- **use** a publishing key remembered on the device. The key is a
+  non-extractable `CryptoKey`, so it cannot be copied out and kept, but it can
+  sign, in place, for as long as the gate runs — and that reaches past you. A
+  signed update record, or a successor site signed with that key, is offered
+  to every reader of your signed sites, on every gate, and a reader who takes
+  the offer takes the forgery. See
+  [Keeping a publishing key on this device](#keeping-a-publishing-key-on-this-device):
+  there is no revocation.
 
-What it cannot do is change a site for anyone else. Pieces are checked against
-the infohash by every peer, so a compromised gate misleads the people who use
-it, and a reader opening the same link from another mirror sees the real site.
-The content does not belong to a gate, which is why any number of them can
-exist.
+What it cannot do is change what is already published. A magnet names fixed
+bytes, and every peer checks pieces against the infohash, so the site at a
+given link is the same site for everyone, on every gate. A compromised gate
+misleads the people who use it about what they see; it cannot alter a site
+under its existing link. The one way it reaches other readers is the one
+above, through a key it was allowed to hold — which is a reason to publish
+from a gate you run yourself, and not to keep a key on a mirror you do not.
 
 ### Why the browser cannot pin it
 

@@ -126,6 +126,10 @@ Costruito comunque, su richiesta esplicita, fuori dal perimetro MVP originale
   isolata. Nessun certificato né DNS: `*.localhost` è loopback e secure context.
   La macchina di sviluppo può ospitare altri servizi: una suite alla volta,
   senza saturare RAM/CPU.
+- Ogni modifica a un file del gate (quelli che il browser esegue) porta con sé
+  `node tools/release-sums.mjs`: la suite fallisce se `release/SHA256SUMS` non
+  corrisponde. La firma di una release la fa solo il maintainer, offline, con la
+  sua chiave: mai in CI, mai una chiave nel repository.
 - Una prova che dice "passa" vale solo se è stato visto fallire: quando si
   aggiunge un controllo di sicurezza, si verifica che il test diventi rosso
   togliendo il controllo.
