@@ -487,13 +487,18 @@ against. Checking needs standard tools and none of Spore's:
 
 A mirror with content isolation on serves `relay.html` and its modules from its
 content domain too, one origin per site, and those run as well. Check one of
-them the same way; a content host serves only the relay's files, so the loop
-skips what it does not serve, and the first line insists the relay is there:
+them the same way. A content host serves only what the relay needs, so the
+loop skips anything else it does not serve, and reports as MISSING any of the
+files the relay cannot run without (the test suite keeps that list equal to
+what the relay actually imports):
 
     SITE=https://$(printf 'a%.0s' $(seq 40)).spore-content.example   # any site's origin
-    curl -fsS -o /dev/null "$SITE/relay.html" || echo 'No relay here: not an isolated mirror.'
+    REQUIRED="relay.html sw.js js/relay.js js/config.js js/isolation.js js/policy.js js/viewer.js"
     while read -r sum path; do
-      curl -fsS -o served "$SITE/$path" 2>/dev/null || continue      # not served here
+      if ! curl -fsS -o served "$SITE/$path" 2>/dev/null; then
+        case " $REQUIRED " in *" $path "*) echo "MISSING  $path" ;; esac      # needed, not served
+        continue                                                              # not needed here
+      fi
       [ "$(sha256sum < served | cut -d' ' -f1)" = "$sum" ] && echo "ok       $path" || echo "DIFFERS  $path"
     done < SHA256SUMS
 

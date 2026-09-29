@@ -4554,6 +4554,16 @@ async function runIsolated () {
     [...needed].every(n => allowed.has(n)) && [...allowed].every(n => needed.has(n)),
     `imports ${[...needed].sort().join(' ')} / allowed ${[...allowed].sort().join(' ')}`)
 
+  // And the verification procedure's list of what a content origin must serve,
+  // which a reader types rather than derives: it must be the same set, or the
+  // check it drives passes a mirror that cannot run.
+  const security = readFileSync(new URL('../SECURITY.md', import.meta.url), 'utf8')
+  const required = new Set((/^\s*REQUIRED="([^"]+)"/m.exec(security)?.[1] ?? '').split(/\s+/).filter(Boolean))
+  const relayNeeds = new Set(['relay.html', 'sw.js', ...[...needed].map(n => `js/${n}`)])
+  check('isolation: the verification procedure requires exactly what a content origin must serve',
+    [...relayNeeds].every(p => required.has(p)) && [...required].every(p => relayNeeds.has(p)),
+    `procedure ${[...required].sort().join(' ')} / relay needs ${[...relayNeeds].sort().join(' ')}`)
+
   // What a release signs is what a browser runs. The list tools/release-sums.mjs
   // signs must be exactly the files the gate's pages load, followed through
   // every import — a module added and not listed would run unsigned, and a
@@ -4580,7 +4590,8 @@ async function runIsolated () {
     // runs just the same.
     const specifiers = [
       ...source.matchAll(/(?:^|\n)\s*import\s+(?:[^'";]*?\sfrom\s*)?['"](\.{1,2}\/[^'"]+)['"]/g),
-      ...source.matchAll(/\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g),
+      // Whitespace is allowed between `import` and its parenthesis.
+      ...source.matchAll(/\bimport\s*\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g),
       ...source.matchAll(/(?:^|\n)\s*export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/g)
     ].map(match => match[1])
     for (const specifier of specifiers) follow(new URL(specifier, base).pathname.replace(/^\/gate\//, ''))
@@ -4604,7 +4615,7 @@ async function runIsolated () {
   // a module nobody listed, perhaps only after some interaction no observer
   // sees. Refused outright, which keeps the walk complete by construction.
   const computed = [...listed].filter(path => path.endsWith('.js'))
-    .filter(path => /\bimport\(\s*(?!['"])/.test(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')))
+    .filter(path => /\bimport\s*\(\s*(?!['"])/.test(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')))
   check('gate code imports only modules it names, never a computed path',
     computed.length === 0, computed.length ? `computed import() in: ${computed.join(' ')}` : 'every import() names its module')
 
