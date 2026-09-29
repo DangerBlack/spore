@@ -485,6 +485,32 @@ against. Checking needs standard tools and none of Spore's:
       printf '%s  %s\n' "$(curl -fsS "$GATE/$path" | sha256sum | cut -d' ' -f1)" "$path"
     done < SHA256SUMS | diff - SHA256SUMS && echo 'This mirror serves the signed release.'
 
+A mirror with content isolation on serves `relay.html` and its modules from its
+content domain too, one origin per site, and those run as well. Check one of
+them the same way; a content host serves only the relay's files, so the loop
+skips what it does not serve, and the first line insists the relay is there:
+
+    SITE=https://$(printf 'a%.0s' $(seq 40)).spore-content.example   # any site's origin
+    curl -fsS -o /dev/null "$SITE/relay.html" || echo 'No relay here: not an isolated mirror.'
+    while read -r sum path; do
+      curl -fsS -o served "$SITE/$path" 2>/dev/null || continue      # not served here
+      [ "$(sha256sum < served | cut -d' ' -f1)" = "$sum" ] && echo "ok       $path" || echo "DIFFERS  $path"
+    done < SHA256SUMS
+
+**On an isolated mirror, two files differ from the release, by design.** Turning
+isolation on means editing `js/config.js` (`CONTENT_ISOLATION`) and
+`index.html` (its `frame-src`), so those two can never match what was signed,
+on the gate's origin or on a content origin. Every other file must. Check the
+two by eye against the release instead — the difference must be those lines
+and nothing else:
+
+    curl -fsS "$GATE/js/config.js" | diff <(git show <release>:js/config.js) -
+    curl -fsS "$GATE/index.html"   | diff <(git show <release>:index.html) -
+
+That is weaker than a signature, and it is where an isolated mirror asks for
+more trust than a plain one. Moving a mirror's settings out of signed code —
+into data the signed code reads and checks — would close it, and is not done.
+
 `allowed_signers` holds one line, `spore-release` followed by the release
 key's public half. Take that line from somewhere other than the mirror you are
 checking, and other than this repository alone, because whoever controls

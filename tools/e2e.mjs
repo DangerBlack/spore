@@ -4599,6 +4599,15 @@ async function runIsolated () {
       if (ref && !/^(?:about:|https?:|data:|blob:|#)/.test(ref)) follow(ref)
     }
   }
+  // The walk above can follow an import only if it names its module. So in
+  // gate code every dynamic import must: `import(\`./${name}.js\`)` could load
+  // a module nobody listed, perhaps only after some interaction no observer
+  // sees. Refused outright, which keeps the walk complete by construction.
+  const computed = [...listed].filter(path => path.endsWith('.js'))
+    .filter(path => /\bimport\(\s*(?!['"])/.test(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')))
+  check('gate code imports only modules it names, never a computed path',
+    computed.length === 0, computed.length ? `computed import() in: ${computed.join(' ')}` : 'every import() names its module')
+
   const unlisted = [...loaded].filter(path => !listed.has(path))
   const unloaded = [...listed].filter(path => !loaded.has(path))
   check('a signed release lists exactly the files the gate loads',
@@ -4673,6 +4682,10 @@ async function runIsolated () {
       viewer.src.startsWith(`${siteOrigin}/relay.html?`), viewer.src)
     check('isolation: the relay is sandboxed with only what it needs',
       viewer.sandbox === 'allow-same-origin allow-scripts', viewer.sandbox)
+
+    const site = await siteFrame(page)
+    // Only now: the relay has run and framed the site, so every file it
+    // needed has been asked for.
     {
       const { gateFiles } = await import('./release-sums.mjs')
       const signed = new Set(await gateFiles())
@@ -4681,8 +4694,6 @@ async function runIsolated () {
         relayFetched.has('relay.html') && unsigned.length === 0,
         unsigned.length ? `fetched but not signed: ${unsigned.join(' ')}` : `${[...relayFetched].sort().join(' ')}`)
     }
-
-    const site = await siteFrame(page)
     const rendered = await site.evaluate(() => ({
       origin: location.origin,
       heading: document.querySelector('h1')?.textContent,
