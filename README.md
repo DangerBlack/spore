@@ -508,6 +508,11 @@ current one.
   the gate's host from learning what you read, so it is not going to change.
   A publisher who wants to be found can also put a copy on an ordinary host,
   with the Spore link as the one that cannot be taken down.
+- **Not a replacement for IPFS.** IPFS is the more capable system and solves a
+  different problem: reading content without trusting the server that sent it.
+  Spore is a bet on one difference — that a reader should become a host — and
+  [WHY_IPFS.md](WHY_IPFS.md) measures how wide that difference is, including
+  three things we believed about IPFS that turned out to be false.
 
 ## Checking it still works
 
@@ -563,6 +568,7 @@ tools/serve.mjs     dev server
 tools/e2e.mjs       browser check of both MVP promises and the security model
 tools/seed.mjs      seed a site from a server: signs, versions, health endpoint
 spec/               protocol drafts, for anyone writing a second gate
+WHY_IPFS.md         how Spore differs from IPFS, measured rather than argued
 example-site/       the Spore whitepaper, published through Spore
 ```
 
